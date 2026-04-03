@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>13 辅助系统 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="12-api.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link active" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>🔩 辅助系统</h1>
+  <p class="subtitle">认证 · 配置 · 会话存储 · 遥测 · Bridge 远程 · Bash 解析器</p>
+
+  <h2>整体实现思路</h2>
+  <p>辅助系统是支撑 Claude Code 核心功能运行的<strong>基础设施层</strong>，涵盖认证、配置、存储、遥测、远程桥接、命令解析等多个子系统。虽然每个子系统相对独立，但它们共同构成了可靠运行的基石。</p>
+
+  <!-- 认证系统 -->
+  <h2>认证系统（6 种方式）</h2>
+  <p><code>auth.ts</code>（2000 行）支持 6 种认证方式，覆盖所有使用场景：</p>
+  <table>
+    <thead><tr><th>认证方式</th><th>适用场景</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag tag-blue">OAuth</span></td><td>Claude.ai 订阅用户</td><td>Max/Pro/Team/Enterprise 计划</td></tr>
+      <tr><td><span class="tag tag-green">API Key</span></td><td>开发者直接使用</td><td>通过环境变量或配置文件</td></tr>
+      <tr><td><span class="tag tag-green">API Key Helper</span></td><td>动态获取 Key</td><td>外部脚本获取，支持 TTL 缓存</td></tr>
+      <tr><td><span class="tag tag-orange">AWS Bedrock</span></td><td>AWS 云用户</td><td>IAM 认证 + STS 临时凭证</td></tr>
+      <tr><td><span class="tag tag-orange">GCP Vertex</span></td><td>GCP 云用户</td><td>GCP 凭证认证</td></tr>
+      <tr><td><span class="tag tag-purple">Managed OAuth</span></td><td>企业用户</td><td>企业管理的 OAuth 流程</td></tr>
+    </tbody>
+  </table>
+  <p>优先级：OAuth &gt; API Key &gt; API Key Helper &gt; Bedrock &gt; Vertex</p>
+
+  <!-- 配置系统 -->
+  <h2>配置系统</h2>
+  <p><code>config.ts</code>（1800 行）实现了两级配置管理：</p>
+  <table>
+    <thead><tr><th>层级</th><th>路径</th><th>作用域</th></tr></thead>
+    <tbody>
+      <tr><td>用户级</td><td><code>~/.claude/config.json</code></td><td>全局配置</td></tr>
+      <tr><td>项目级</td><td><code>.claude/config.json</code></td><td>项目配置</td></tr>
+    </tbody>
+  </table>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">原子写入</div>
+      <div class="card-desc">通过 lockfile 保护，防止并发写入导致配置损坏</div>
+    </div>
+    <div class="card">
+      <div class="card-title">备份恢复</div>
+      <div class="card-desc">写入前自动备份，损坏时可恢复</div>
+    </div>
+    <div class="card">
+      <div class="card-title">配置迁移</div>
+      <div class="card-desc">migrateConfigFields 处理版本升级时的格式变更</div>
+    </div>
+    <div class="card">
+      <div class="card-title">信任对话框</div>
+      <div class="card-desc">isPathTrusted 首次打开项目时确认信任</div>
+    </div>
+  </div>
+
+  <h3>设置合并优先级</h3>
+  <div class="flow">
+    <div class="flow-step highlight">MDM（企业管理）</div>
+    <span class="flow-arrow">&gt;</span>
+    <div class="flow-step">用户设置</div>
+    <span class="flow-arrow">&gt;</span>
+    <div class="flow-step">项目设置</div>
+    <span class="flow-arrow">&gt;</span>
+    <div class="flow-step">默认值</div>
+  </div>
+  <p>平台支持：macOS（plist）、Windows（注册表）、通用（JSON）。</p>
+
+  <!-- 会话存储 -->
+  <h2>会话存储</h2>
+  <p><code>sessionStorage.ts</code>（5000 行）管理对话会话的持久化。存储格式：JSONL（每行一个 JSON 对象），支持增量追加。</p>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">会话恢复 /resume</div>
+      <div class="card-desc">从历史会话恢复完整上下文</div>
+    </div>
+    <div class="card">
+      <div class="card-title">会话分支 /branch</div>
+      <div class="card-desc">从某个时间点创建对话分支</div>
+    </div>
+    <div class="card">
+      <div class="card-title">远程同步</div>
+      <div class="card-desc">支持与远程环境同步会话状态</div>
+    </div>
+    <div class="card">
+      <div class="card-title">子 Agent 独立 transcript</div>
+      <div class="card-desc">每个子 Agent 有独立的会话记录</div>
+    </div>
+  </div>
+
+  <!-- 遥测系统 -->
+  <h2>遥测系统</h2>
+  <p><code>telemetry/</code> 目录（9 文件）集成了多个遥测后端：</p>
+  <table>
+    <thead><tr><th>后端</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag tag-blue">Datadog</span></td><td>事件追踪、错误监控</td></tr>
+      <tr><td><span class="tag tag-green">BigQuery</span></td><td>指标导出、数据分析</td></tr>
+      <tr><td><span class="tag tag-orange">OpenTelemetry</span></td><td>标准化追踪集成</td></tr>
+      <tr><td><span class="tag tag-purple">Perfetto</span></td><td>Chrome DevTools 兼容的性能追踪</td></tr>
+    </tbody>
+  </table>
+  <p>追踪粒度：支持 span 级别的会话追踪，可以精确到每个工具调用的耗时。</p>
+
+  <!-- Bridge 远程桥接 -->
+  <h2>Bridge 远程桥接</h2>
+  <p><code>bridge/</code> 目录（30 文件）实现了本地终端与远程环境的桥接：</p>
+  <div class="flow">
+    <div class="flow-step">本地终端</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">REPL Bridge<br><small>双向通信</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">JWT 认证</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">远程会话<br><small>Session Runner</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">远程工具执行</div>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">REPL Bridge</div>
+      <div class="card-desc">本地终端 ↔ 远程环境的双向通信</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Session Runner</div>
+      <div class="card-desc">远程会话的生命周期管理</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Headless 模式</div>
+      <div class="card-desc">无 UI 的 CI/CD 集成模式</div>
+    </div>
+    <div class="card">
+      <div class="card-title">容量管理</div>
+      <div class="card-desc">远程环境的容量监控和唤醒</div>
+    </div>
+  </div>
+
+  <!-- Teleport -->
+  <h3>Teleport 跨机器迁移</h3>
+  <div class="flow">
+    <div class="flow-step">打包 Git bundle</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">选择目标环境</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">传输 bundle + 会话</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">目标环境恢复</div>
+  </div>
+
+  <!-- Bash 解析器 -->
+  <h2>Bash 解析器</h2>
+  <p><code>bash/</code> 目录（23 文件）实现了完整的 Bash 命令解析，是权限系统的命令级控制基础：</p>
+  <table>
+    <thead><tr><th>能力</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>AST 解析</td><td>基于 tree-sitter 的语法树解析</td></tr>
+      <tr><td>命令前缀提取</td><td>从复杂命令中提取主命令（用于权限匹配）</td></tr>
+      <tr><td>Heredoc 处理</td><td>正确解析 heredoc 语法</td></tr>
+      <tr><td>管道重排</td><td>分析管道中的命令序列</td></tr>
+      <tr><td>Shell 补全</td><td>命令和路径的自动补全</td></tr>
+      <tr><td>安全分析</td><td>检测潜在危险的命令模式</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 其他辅助模块 -->
+  <h2>其他辅助模块</h2>
+  <table>
+    <thead><tr><th>模块</th><th>功能</th></tr></thead>
+    <tbody>
+      <tr><td>Chrome 集成</td><td>Native Messaging Host、MCP 桥接（7 文件）</td></tr>
+      <tr><td>深度链接</td><td><code>claude://</code> 协议处理</td></tr>
+      <tr><td>安全存储</td><td>macOS Keychain 集成</td></tr>
+      <tr><td>Cron 调度</td><td>Cron 表达式解析和定时任务</td></tr>
+      <tr><td>PDF 解析</td><td>PDF 读取和分页提取</td></tr>
+      <tr><td>Notebook</td><td>Jupyter Notebook 解析</td></tr>
+      <tr><td>Computer Use</td><td>macOS 屏幕操作（Swift 桥接，15 文件）</td></tr>
+      <tr><td>虚拟宠物</td><td>确定性随机生成的虚拟宠物 🐾</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">6 种认证覆盖全场景</div>
+      <div class="card-desc">从个人 API Key 到企业 Managed OAuth，优先级明确</div>
+    </div>
+    <div class="card">
+      <div class="card-title">原子写入保证配置一致性</div>
+      <div class="card-desc">lockfile + 备份恢复，防止并发写入损坏</div>
+    </div>
+    <div class="card">
+      <div class="card-title">JSONL 适合增量追加</div>
+      <div class="card-desc">会话存储不需要重写整个文件，追加即可</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Bash 解析器是完整编译器前端</div>
+      <div class="card-desc">AST 解析 + 命令提取 + 安全分析，支撑权限系统</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="12-api.html">上一篇：API通信层</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

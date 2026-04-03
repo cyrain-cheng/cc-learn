@@ -1,0 +1,12 @@
+# 只推送文档和前端，其他全部忽略
+/*
+!analysis/
+!modules/
+!front/
+!.github/
+!.gitignore
+!README.md
+
+# 源码和编辑器配置不推
+src/
+.vscode/

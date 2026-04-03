@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>10 终端UI引擎 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="09-state.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="11-commands.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link active" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>🖥️ 终端UI引擎</h1>
+  <p class="subtitle">96 文件自定义 Ink · 纯 TS Yoga 布局 · Screen diff 增量渲染 · 池化设计</p>
+
+  <h2>整体实现思路</h2>
+  <p>Claude Code 内置了一个<strong>完整的终端 UI 渲染引擎</strong>（96 个文件），替代了外部 Ink 包。实现了从 React 组件树到终端 ANSI 输出的完整渲染流水线。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-icon">🔧</div>
+      <div class="card-title">自主可控</div>
+      <div class="card-desc">不依赖外部 Ink 包，完全掌控渲染行为和性能优化</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">📐</div>
+      <div class="card-title">纯 TS Yoga</div>
+      <div class="card-desc">纯 TypeScript 实现 Yoga 布局引擎，避免 C++ 原生绑定的跨平台编译问题</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">⚡</div>
+      <div class="card-title">增量渲染</div>
+      <div class="card-desc">Screen diff + Patch 优化，只更新变化的部分，减少终端闪烁</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">♻️</div>
+      <div class="card-title">池化设计</div>
+      <div class="card-desc">CharPool、StylePool、HyperlinkPool 减少内存分配和 GC 压力</div>
+    </div>
+  </div>
+
+  <!-- 渲染流水线 -->
+  <h2>渲染流水线</h2>
+  <div class="flow">
+    <div class="flow-step">React 组件树<br><small>Box / Text / Button</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">React Reconciler<br><small>fiber diff</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">虚拟 DOM<br><small>createNode</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">Yoga 布局<br><small>Flexbox 计算</small></div>
+  </div>
+  <div class="flow">
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">renderer.ts<br><small>DOM → Screen</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">Screen diff<br><small>逐行逐 Cell 对比</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">Patch 优化<br><small>合并/去重/取消</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">stdout.write<br><small>ANSI 输出</small></div>
+  </div>
+
+  <!-- Screen 缓冲区 -->
+  <h2>Screen 缓冲区（池化设计）</h2>
+  <p><code>screen.ts</code>（1471 行）实现了 Cell 级别的屏幕缓冲区：</p>
+  <pre><code>type Cell = {
+  char: number       // 字符（池化索引）
+  styleId: number    // 样式（池化索引）
+  hyperlinkId: number // 超链接（池化索引）
+  width: CellWidth   // 字符宽度（1 或 2）
+}</code></pre>
+
+  <table>
+    <thead><tr><th>池</th><th>作用</th><th>优化效果</th></tr></thead>
+    <tbody>
+      <tr><td><code>CharPool</code></td><td>字符串池</td><td>避免重复存储相同字符</td></tr>
+      <tr><td><code>StylePool</code></td><td>样式池</td><td>相同样式共享 ID，缓存 ANSI 序列转换</td></tr>
+      <tr><td><code>HyperlinkPool</code></td><td>超链接池</td><td>相同 URL 共享 ID</td></tr>
+    </tbody>
+  </table>
+
+  <!-- Patch 类型 -->
+  <h2>Patch 类型</h2>
+  <pre><code>type Patch =
+  | { type: 'stdout'; content: string }        // 文本输出
+  | { type: 'clear'; count: number }           // 清除行
+  | { type: 'clearTerminal'; reason: string }  // 清屏
+  | { type: 'cursorHide' | 'cursorShow' }      // 光标控制
+  | { type: 'cursorMove'; x: number; y: number } // 光标移动
+  | { type: 'styleStr'; str: string }          // 样式序列
+  | { type: 'hyperlink'; uri: string }         // 超链接</code></pre>
+  <p>优化策略：相邻文本 Patch 合并、重复样式切换去除、互相抵消的 Patch 对移除。</p>
+
+  <!-- 纯 TS Yoga -->
+  <h2>纯 TS Yoga 布局</h2>
+  <p>用纯 TypeScript 实现的 Yoga 布局引擎，替代了 C++ 原生绑定。无需编译原生模块，跨平台零配置。</p>
+  <pre><code>class YogaLayoutNode implements LayoutNode {
+  insertChild(child, index): void
+  removeChild(child): void
+  calculateLayout(width?, height?): void
+  getComputedWidth(): number
+  getComputedHeight(): number
+  // 支持 Flexbox：方向、对齐、换行、弹性伸缩
+}</code></pre>
+
+  <!-- 组件和事件系统 -->
+  <h2>组件和事件系统</h2>
+  <h3>核心组件</h3>
+  <p><code>ink.tsx</code>（1664 行）管理渲染循环、备用屏幕切换、鼠标/键盘事件、终端尺寸变化。</p>
+
+  <h3>事件系统</h3>
+  <table>
+    <thead><tr><th>文件</th><th>功能</th></tr></thead>
+    <tbody>
+      <tr><td><code>click-event.ts</code></td><td>鼠标点击（支持区域命中测试）</td></tr>
+      <tr><td><code>input-event.ts</code></td><td>键盘输入（Key 解析、组合键）</td></tr>
+      <tr><td><code>focus-event.ts</code></td><td>焦点管理（Tab 切换）</td></tr>
+      <tr><td><code>dispatcher.ts</code></td><td>事件分发（冒泡、优先级）</td></tr>
+      <tr><td><code>emitter.ts</code></td><td>事件发射器</td></tr>
+      <tr><td><code>selection.ts</code></td><td>文本选择（鼠标拖选、双击选词）</td></tr>
+    </tbody>
+  </table>
+  <p>事件冒泡：点击事件从最内层节点向上冒泡，直到被处理或到达根节点。借鉴浏览器 DOM 事件模型。</p>
+
+  <!-- Unicode 宽度 -->
+  <h3>Unicode 宽度</h3>
+  <p><code>stringWidth.ts</code> 计算字符串在终端中的显示宽度。优先使用 <code>Bun.stringWidth</code>（性能最优），回退到自实现的 Unicode 宽度计算（处理 CJK 字符、Emoji 等双宽度字符）。</p>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">完整的渲染流水线</div>
+      <div class="card-desc">从 React 到 ANSI 输出，每一层职责清晰</div>
+    </div>
+    <div class="card">
+      <div class="card-title">纯 TS Yoga 避免原生依赖</div>
+      <div class="card-desc">跨平台零配置，是务实的工程决策</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Screen diff + Patch 优化</div>
+      <div class="card-desc">增量渲染减少终端闪烁，提升用户体验</div>
+    </div>
+    <div class="card">
+      <div class="card-title">池化设计减少内存压力</div>
+      <div class="card-desc">CharPool、StylePool 避免重复分配，降低 GC 频率</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="09-state.html">上一篇：状态管理</a> &nbsp;|&nbsp;
+    <a href="11-commands.html">下一篇：命令与技能 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

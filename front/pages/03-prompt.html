@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>03 提示词系统 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="02-tools.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="04-security.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link active" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>📝 提示词系统</h1>
+  <p class="subtitle">提示词即代码 · 多层动态组合 · 缓存优先 · 分层组合</p>
+
+  <h2>整体实现思路</h2>
+  <p>提示词系统是整个项目最精妙的部分之一。它不是一个静态字符串，而是一个<strong>多层动态组合的工程体系</strong>，由三个层面构成：系统提示词（告诉 AI 它是谁）、工具提示词（告诉 AI 每个工具怎么用）、上下文注入（把运行时信息动态注入对话）。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-icon">💻</div>
+      <div class="card-title">提示词即代码</div>
+      <div class="card-desc">通过函数动态生成，支持条件编译（feature() 门控）、运行时注入、版本差异</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">💾</div>
+      <div class="card-title">缓存优先</div>
+      <div class="card-desc">静态/动态有明确分界线，静态部分可跨用户全局缓存，直接影响 API 成本</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">🧩</div>
+      <div class="card-title">分层组合</div>
+      <div class="card-desc">支持覆盖、替换、追加三种模式，不同场景有不同的组合策略</div>
+    </div>
+  </div>
+
+  <!-- 系统提示词结构 -->
+  <h2>系统提示词结构</h2>
+  <h3>静态部分（可全局缓存）</h3>
+  <div class="layers">
+    <div class="layer l3">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">Intro Section</div><div class="layer-desc">身份定义 + 网络安全指令 + URL 生成限制</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">System Section</div><div class="layer-desc">工具权限模式说明 + prompt injection 防护 + 自动压缩说明</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">Doing Tasks</div><div class="layer-desc">代码风格指南 + 安全编码要求 + 错误处理策略</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">Actions Section</div><div class="layer-desc">操作风险评估框架：可逆性 / 影响范围 / 破坏性</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">5</div>
+      <div><div class="layer-title">Using Your Tools</div><div class="layer-desc">工具偏好引导 + 并行工具调用指导</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">6</div>
+      <div><div class="layer-title">Tone and Style</div><div class="layer-desc">不用 emoji、简洁回复、代码引用格式</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">7</div>
+      <div><div class="layer-title">Output Efficiency</div><div class="layer-desc">内部版：详细沟通指南 / 外部版：简洁直接</div></div>
+    </div>
+  </div>
+
+  <p style="text-align:center;color:var(--accent);font-weight:600;margin:16px 0;">── SYSTEM_PROMPT_DYNAMIC_BOUNDARY ──</p>
+
+  <h3>动态部分（注册表管理）</h3>
+  <div class="layers">
+    <div class="layer l5">
+      <div class="layer-num">8</div>
+      <div><div class="layer-title">Session Guidance</div><div class="layer-desc">会话特定指导</div></div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-num">9</div>
+      <div><div class="layer-title">Memory</div><div class="layer-desc">记忆文件内容</div></div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-num">10</div>
+      <div><div class="layer-title">Env Info / Language / Output Style</div><div class="layer-desc">环境信息、语言设置、输出样式</div></div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-num">11</div>
+      <div><div class="layer-title">MCP Instructions / Scratchpad / Token Budget</div><div class="layer-desc">MCP 服务器指令、草稿本、Token 预算</div></div>
+    </div>
+  </div>
+
+  <!-- 8种工具提示词设计模式 -->
+  <h2>8 种工具提示词设计模式</h2>
+  <div class="accordion">
+    <div class="accordion-item">
+      <div class="accordion-header">模式一：工具偏好引导（BashTool）</div>
+      <div class="accordion-body">
+        <p>当系统有多个工具时，明确告诉 AI 什么场景用什么工具，用 <code>NOT</code> 强调不要用什么。</p>
+        <pre><code>IMPORTANT: Avoid using this tool to run cat, head, tail...
+Instead, use the appropriate dedicated tool:
+- File search: Use GlobTool (NOT find or ls)
+- Content search: Use GrepTool (NOT grep or rg)
+- Read files: Use Read (NOT cat/head/tail)</code></pre>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">模式二：NEVER 红线（Git 安全协议）</div>
+      <div class="accordion-body">
+        <p>对于危险操作，使用 <code>NEVER</code> + <code>CRITICAL</code> 强调词，并给出明确的例外条件。</p>
+        <pre><code>Git Safety Protocol:
+- NEVER update the git config
+- NEVER run destructive git commands (push --force, reset --hard...)
+- CRITICAL: Always create NEW commits rather than amending</code></pre>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">模式三：结构化操作指南（Git 提交）</div>
+      <div class="accordion-body">
+        <p>对于复杂多步骤操作，使用编号步骤，并标注哪些可以并行、哪些必须串行。</p>
+        <pre><code>1. Run the following bash commands in parallel:
+   - Run a git status command...
+   - Run a git diff command...
+2. Analyze all staged changes and draft a commit message
+3. Run the following commands in parallel:
+   - Add relevant untracked files
+   - Create the commit</code></pre>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">模式四：角色比喻（AgentTool）</div>
+      <div class="accordion-body">
+        <p>用比喻帮助 AI 理解子 Agent 的上下文限制。</p>
+        <pre><code>Brief the agent like a smart colleague who just walked
+into the room — it hasn't seen this conversation,
+doesn't know what you've tried, doesn't understand
+why this task matters.</code></pre>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">模式五：反模式警告（AgentTool）</div>
+      <div class="accordion-body">
+        <p>不仅告诉 AI 该做什么，还明确告诉它不该做什么，并解释为什么。</p>
+        <pre><code>**Never delegate understanding.** Don't write
+"based on your findings, fix the bug" — those phrases
+push synthesis onto the agent instead of doing it yourself.</code></pre>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">模式六：命令式短语（Fork 指导）</div>
+      <div class="accordion-body">
+        <p>用简短有力的命令式短语建立行为规则。</p>
+        <pre><code>**Don't peek.** The tool result includes an output_file path —
+do not Read or tail it unless the user explicitly asks.
+
+**Don't race.** After launching, you know nothing about
+what the fork found. Never fabricate or predict fork results.</code></pre>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">模式七：消除犹豫（FileReadTool）</div>
+      <div class="accordion-body">
+        <p>明确告诉 AI 可以大胆尝试，错误会被优雅处理。</p>
+        <pre><code>Assume this tool is able to read all files on the machine.
+If the User provides a path to a file assume that path is valid.
+It is okay to read a file that does not exist; an error will be returned.</code></pre>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">模式八：强制输出格式（WebSearchTool）</div>
+      <div class="accordion-body">
+        <p>对于必须遵守的规则，使用 <code>CRITICAL REQUIREMENT</code> + <code>MUST</code> + <code>MANDATORY</code> 三重强调。</p>
+        <pre><code>CRITICAL REQUIREMENT - You MUST follow this:
+- After answering, you MUST include a "Sources:" section
+- This is MANDATORY - never skip including sources</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- 上下文注入 -->
+  <h2>上下文注入（60+ 种附件）</h2>
+  <p><code>attachments.ts</code>（3200 行）管理 60+ 种附件类型，在每轮对话前动态注入：</p>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">CLAUDE.md 指令</div>
+      <div class="card-desc">项目级行为指导，支持 always / fileMatch / manual 三种注入模式</div>
+    </div>
+    <div class="card">
+      <div class="card-title">会话记忆</div>
+      <div class="card-desc">SessionMemory + findRelevantMemories 相关记忆检索</div>
+    </div>
+    <div class="card">
+      <div class="card-title">模式指令</div>
+      <div class="card-desc">Plan 模式 / Auto 模式的专用指令注入</div>
+    </div>
+    <div class="card">
+      <div class="card-title">运行时信息</div>
+      <div class="card-desc">日期变更、Token 使用量、Todo 提醒、LSP 诊断等</div>
+    </div>
+    <div class="card">
+      <div class="card-title">协作信息</div>
+      <div class="card-desc">队友邮箱消息、Agent 列表、团队上下文</div>
+    </div>
+    <div class="card">
+      <div class="card-title">效率提醒</div>
+      <div class="card-desc">压缩提醒、上下文效率提醒、输出样式</div>
+    </div>
+  </div>
+
+  <!-- Prompt Cache -->
+  <h2>Prompt Cache 5 大优化策略</h2>
+  <div class="layers">
+    <div class="layer l4">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">静态/动态分界线</div><div class="layer-desc">SYSTEM_PROMPT_DYNAMIC_BOUNDARY — 静态部分可跨用户全局缓存</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">Beta Header 锁存</div><div class="layer-desc">一旦发送某个 header，整个会话保持不变，防止缓存 key 变化</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">路径规范化</div><div class="layer-desc">$TMPDIR 替代 /tmp/claude-1001/，使提示词跨用户一致</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">工具 Schema 去重</div><div class="layer-desc">沙箱配置去重，节省 150-200 tokens/请求</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">5</div>
+      <div><div class="layer-title">动态部分注册表</div><div class="layer-desc">systemPromptSection() 缓存，避免每轮重新计算</div></div>
+    </div>
+  </div>
+
+  <!-- 优先级组合 -->
+  <h2>提示词优先级组合</h2>
+  <p>不同场景下，系统提示词的组合策略不同。优先级从高到低：</p>
+  <div class="flow">
+    <div class="flow-step highlight">Override</div>
+    <span class="flow-arrow">&gt;</span>
+    <div class="flow-step">Coordinator</div>
+    <span class="flow-arrow">&gt;</span>
+    <div class="flow-step">Agent</div>
+    <span class="flow-arrow">&gt;</span>
+    <div class="flow-step">Custom</div>
+    <span class="flow-arrow">&gt;</span>
+    <div class="flow-step">Default</div>
+  </div>
+  <p><code>append</code> 始终追加在末尾，不受优先级影响。</p>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">提示词是代码</div>
+      <div class="card-desc">用函数动态生成，支持条件编译、运行时注入、版本差异</div>
+    </div>
+    <div class="card">
+      <div class="card-title">静态/动态分界线</div>
+      <div class="card-desc">直接影响 API 成本，静态部分可全局缓存</div>
+    </div>
+    <div class="card">
+      <div class="card-title">CLAUDE.md 三种注入模式</div>
+      <div class="card-desc">always / fileMatch / manual，支持 #include 引用外部文件</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="02-tools.html">上一篇：工具系统</a> &nbsp;|&nbsp;
+    <a href="04-security.html">下一篇：安全与权限 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

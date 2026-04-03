@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>06 上下文管理 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="05-agent.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="07-mcp.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link active" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>🧠 上下文管理</h1>
+  <p class="subtitle">5 种压缩策略 · Token 计算 · 记忆系统 · Auto Dream</p>
+
+  <h2>整体实现思路</h2>
+  <p>LLM 的上下文窗口是有限的稀缺资源。Claude Code 通过<strong>多种压缩策略 + 持久化记忆系统</strong>智能管理上下文，确保在有限窗口内保留最有价值的信息。核心理念："分层压缩、按需触发、记忆持久化"。</p>
+
+  <!-- 压缩策略对比 -->
+  <h2>5 种压缩策略（轻 → 重）</h2>
+  <div class="card-grid">
+    <div class="card" style="border-color:var(--green)">
+      <div class="card-title">① Snip 压缩</div>
+      <div class="card-desc">最轻量：直接删除旧工具结果，替换为占位符。零额外成本，不调用 AI。</div>
+    </div>
+    <div class="card" style="border-color:var(--green)">
+      <div class="card-title">② MicroCompact</div>
+      <div class="card-desc">局部压缩：针对单个过大的工具结果，使用 Haiku 模型压缩输出内容。</div>
+    </div>
+    <div class="card" style="border-color:var(--orange)">
+      <div class="card-title">③ Context Collapse</div>
+      <div class="card-desc">折叠旧对话段：保留每轮关键信息（意图、决策、工具调用），删除详细中间过程。</div>
+    </div>
+    <div class="card" style="border-color:var(--red)">
+      <div class="card-title">④ AutoCompact</div>
+      <div class="card-desc">最核心：调用 Claude 生成对话摘要替换旧消息。阈值 = 窗口 × 0.8。</div>
+    </div>
+    <div class="card" style="border-color:var(--red)">
+      <div class="card-title">⑤ Reactive Compact</div>
+      <div class="card-desc">紧急压缩：API 返回 prompt_too_long (413) 时触发激进 AutoCompact。</div>
+    </div>
+  </div>
+
+  <!-- Token 计算 -->
+  <h2>Token 计算逻辑</h2>
+  <p><code>tokens.ts</code> 中的 <code>tokenCountWithEstimation</code> 是所有压缩策略的基础：</p>
+  <div class="layers">
+    <div class="layer l3">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">找到最后一个有 usage 的 assistant 消息</div><div class="layer-desc">API 返回的实际 Token 数</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">处理并行工具调用的消息分裂</div><div class="layer-desc">同一 message.id 可能对应多个交错的 tool_result</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">回退到第一个分裂消息</div><div class="layer-desc">确保所有交错的 tool_result 都被估算</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">最终结果</div><div class="layer-desc">= usage.input_tokens + cache_tokens + output_tokens + 新消息估算</div></div>
+    </div>
+  </div>
+
+  <!-- AutoCompact 触发条件 -->
+  <h2>AutoCompact 触发条件</h2>
+  <pre><code>function getAutoCompactThreshold(model: string): number {
+  const contextWindow = getEffectiveContextWindowSize(model)
+  return Math.floor(contextWindow * 0.8)  // 阈值 = 窗口 × 0.8
+}</code></pre>
+  <p>执行流程：Token 超过阈值 → 选择压缩范围 → 调用 Claude 生成摘要 → 插入压缩边界标记 → 删除旧消息 → 恢复关键附件（CLAUDE.md、系统上下文）。</p>
+
+  <!-- 记忆系统 -->
+  <h2>记忆系统</h2>
+  <h3>SessionMemory — 会话记忆</h3>
+  <p>自动从对话中提取关键信息，持久化到 <code>~/.claude/memory/</code> 目录。每个记忆是独立的 <code>.md</code> 文件，带 frontmatter 元数据。</p>
+  <p>提取时机：AutoCompact 执行后、会话结束时、用户显式触发（<code>/remember</code> 命令）。</p>
+
+  <h3>extractMemories — 记忆提取</h3>
+  <p>通过后台 Fork Agent 执行，安全限制：只能读写 <code>~/.claude/memory/</code> 目录，不能修改项目代码。</p>
+  <pre><code>// 提取提示词核心策略：
+// 第 1 轮：并行读取所有可能需要更新的文件
+// 第 2 轮：并行写入/编辑所有变更
+// 轮次预算有限，高效策略优先</code></pre>
+
+  <h3>Auto Dream — 自动整理</h3>
+  <p>后台自动整理和优化记忆，类似人类睡眠时的记忆整合：</p>
+  <div class="flow">
+    <div class="flow-step">检查时间间隔</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">扫描最近会话</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">获取文件锁</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">Fork Agent 整理<br><small>合并/更新/删除</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">只读 Bash 确保安全</div>
+  </div>
+
+  <!-- 压缩决策流程 -->
+  <h2>压缩决策流程</h2>
+  <div class="flow">
+    <div class="flow-step">Token 计算</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">超过阈值?</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">① Snip</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">② MicroCompact</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">③ Collapse</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">④ AutoCompact</div>
+  </div>
+  <p>如果 API 返回 <code>prompt_too_long</code>，触发 ⑤ Reactive Compact（紧急激进压缩），最多尝试一次。</p>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">5 种策略互补而非互斥</div>
+      <div class="card-desc">从轻量到重量依次触发，每种解决不同粒度的问题</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Token 计算处理消息分裂</div>
+      <div class="card-desc">并行工具调用导致的交错消息结构是计算难点</div>
+    </div>
+    <div class="card">
+      <div class="card-title">记忆提取是受限 Fork Agent</div>
+      <div class="card-desc">只能读写记忆目录，不能修改项目代码</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Auto Dream 类似人类记忆整合</div>
+      <div class="card-desc">后台定期清理冗余和过时记忆</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="05-agent.html">上一篇：多Agent系统</a> &nbsp;|&nbsp;
+    <a href="07-mcp.html">下一篇：MCP协议 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

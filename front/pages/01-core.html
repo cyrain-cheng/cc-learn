@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>01 核心引擎 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="../index.html">首页</a>
+    <a href="02-tools.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link active" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>⚙️ 核心引擎</h1>
+  <p class="subtitle">queryLoop 对话循环 · Tool 基类 · 工具编排 · 流式执行</p>
+
+  <!-- Overview -->
+  <h2>整体实现思路</h2>
+  <p>核心引擎是 Claude Code 的心脏，实现了"用户输入 → AI 推理 → 工具执行 → 结果反馈"的完整闭环。核心设计思想是 <strong>AsyncGenerator 驱动的流式循环</strong>：整个对话过程是一个 <code>while(true)</code> 循环，每一轮迭代包含 API 调用、工具执行、上下文压缩三个阶段。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-icon">🔄</div>
+      <div class="card-title">流式处理</div>
+      <div class="card-desc">API 响应一边到达一边渲染，工具一边执行一边返回结果</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">⏹️</div>
+      <div class="card-title">可中断</div>
+      <div class="card-desc">通过 AbortController 随时中断当前循环</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">🧩</div>
+      <div class="card-title">可组合</div>
+      <div class="card-desc">通过 yield* 将子生成器的结果透传给父生成器</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">💾</div>
+      <div class="card-title">内存友好</div>
+      <div class="card-desc">不需要缓存完整的中间结果</div>
+    </div>
+  </div>
+
+  <!-- Key Files -->
+  <h2>关键文件</h2>
+  <table>
+    <thead><tr><th>文件</th><th>行数</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/query.ts</code></td><td>~1500</td><td>对话循环（queryLoop），管理 API 调用、工具执行、压缩、恢复</td></tr>
+      <tr><td><code>src/QueryEngine.ts</code></td><td>~1200</td><td>对话引擎封装，管理消息、中断、模型切换</td></tr>
+      <tr><td><code>src/Tool.ts</code></td><td>~800</td><td>工具基类定义，ToolUseContext、权限检查接口</td></tr>
+      <tr><td><code>src/tools.ts</code></td><td>~400</td><td>工具注册表，条件编译、权限过滤、工具池组装</td></tr>
+      <tr><td><code>src/services/tools/toolOrchestration.ts</code></td><td>~200</td><td>工具编排，分区算法、并发/串行控制</td></tr>
+      <tr><td><code>src/services/tools/StreamingToolExecutor.ts</code></td><td>~530</td><td>流式工具执行器，API 响应到达时即开始执行</td></tr>
+    </tbody>
+  </table>
+
+  <!-- queryLoop Flow -->
+  <h2>queryLoop 对话循环</h2>
+  <p>queryLoop 是整个系统最核心的函数，位于 <code>src/query.ts</code>。它是一个 <code>async function*</code>，在 <code>while(true)</code> 循环中执行以下步骤：</p>
+
+  <div class="flow">
+    <div class="flow-step">技能预取</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">工具结果预算</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">Snip 压缩</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">MicroCompact</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">Context Collapse</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">AutoCompact</div>
+  </div>
+  <div class="flow">
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">调用 Claude API（流式）</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">流式事件循环</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">工具执行</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">获取附件</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">继续下一轮</div>
+  </div>
+
+  <!-- Tool Orchestration -->
+  <h2>工具编排 — 并发控制</h2>
+  <p><code>toolOrchestration.ts</code> 实现了智能的工具并发控制。分区算法将工具调用分为并发安全批次和非并发安全批次：</p>
+
+  <div class="card-grid">
+    <div class="card" style="border-color:var(--green)">
+      <div class="card-title">✅ 并发安全（并行执行）</div>
+      <div class="card-desc">Read, Glob, Grep, WebFetch — 只读工具，最大并发 10</div>
+    </div>
+    <div class="card" style="border-color:var(--orange)">
+      <div class="card-title">⚠️ 非并发安全（串行执行）</div>
+      <div class="card-desc">Write, Edit, Bash — 有副作用的工具，逐个执行</div>
+    </div>
+  </div>
+
+  <p>连续的并发安全工具合并为一个批次并行执行，遇到非并发安全工具则切换为串行。上下文修改器（contextModifier）在批次完成后统一应用。</p>
+
+  <!-- StreamingToolExecutor -->
+  <h2>StreamingToolExecutor — 流式工具执行</h2>
+  <p>在 API 响应还在流式到达时就开始执行工具，不等完整响应：</p>
+
+  <div class="layers">
+    <div class="layer l3">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">收到 tool_use block</div><div class="layer-desc">addTool() 入队，检查是否可以立即执行</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">并发安全 → 立即执行</div><div class="layer-desc">与其他并发安全工具并行运行</div></div>
+    </div>
+    <div class="layer l2">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">非并发安全 → 等待</div><div class="layer-desc">等待前面所有工具完成后再执行</div></div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">API 流结束</div><div class="layer-desc">getRemainingResults() 等待所有剩余工具完成</div></div>
+    </div>
+  </div>
+
+  <!-- Error Recovery -->
+  <h2>错误恢复机制</h2>
+  <div class="accordion">
+    <div class="accordion-item">
+      <div class="accordion-header">max_output_tokens — 输出截断恢复（最多 3 次）</div>
+      <div class="accordion-body">
+        <p>当 AI 响应被截断时，自动继续下一轮循环让 AI 从断点继续。最多恢复 3 次，超过则停止。</p>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">prompt_too_long — 反应式压缩</div>
+      <div class="accordion-body">
+        <p>API 返回 413 时触发 Reactive Compact，压缩上下文后重试。</p>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">流式失败 — 非流式降级</div>
+      <div class="accordion-body">
+        <p>流式请求失败时自动降级为非流式请求。包含空闲看门狗（90s）和停顿检测（30s）。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dependency Injection -->
+  <h2>依赖注入（query/deps.ts）</h2>
+  <pre><code>type QueryDeps = {
+  callModel: typeof queryModelWithStreaming  // API 调用
+  microcompact: typeof microcompactMessages  // 微压缩
+  autocompact: typeof autoCompactIfNeeded    // 自动压缩
+  uuid: () =&gt; string                        // UUID 生成
+}
+
+// 生产环境用 productionDeps()，测试时注入 fakes</code></pre>
+
+  <!-- Key Takeaways -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">queryLoop 是状态机</div>
+      <div class="card-desc">State 对象在每轮循环开始时解构，在 continue 站点重新赋值</div>
+    </div>
+    <div class="card">
+      <div class="card-title">错误恢复分层</div>
+      <div class="card-desc">max_output_tokens → prompt_too_long → 流式降级，逐级处理</div>
+    </div>
+    <div class="card">
+      <div class="card-title">分区算法</div>
+      <div class="card-desc">连续并发安全工具合并为批次，非安全工具单独批次</div>
+    </div>
+    <div class="card">
+      <div class="card-title">依赖注入</div>
+      <div class="card-desc">4 个依赖通过 QueryDeps 注入，测试时替换为 fakes</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp; <a href="02-tools.html">下一篇：工具系统 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

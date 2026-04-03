@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>05 多Agent系统 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="04-security.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="06-context.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link active" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>🤖 多Agent系统</h1>
+  <p class="subtitle">Fork / Subagent / Teammate · AsyncLocalStorage 隔离 · 邮箱通信 · Worktree</p>
+
+  <h2>整体实现思路</h2>
+  <p>多 Agent 系统体现了从"单 Agent 独立工作"到"多 Agent 协作完成复杂任务"的演进。系统提供三种核心模式，覆盖从简单子任务到复杂并行开发的全部场景。</p>
+
+  <!-- 对比表 -->
+  <h2>Fork vs Subagent vs Teammate</h2>
+  <table>
+    <thead><tr><th>特性</th><th>Fork</th><th>Subagent</th><th>Teammate</th></tr></thead>
+    <tbody>
+      <tr><td>上下文</td><td>继承父 Agent 消息历史</td><td>全新上下文</td><td>独立上下文</td></tr>
+      <tr><td>Prompt Cache</td><td>共享父 Agent 缓存</td><td>独立缓存</td><td>独立缓存</td></tr>
+      <tr><td>工具集</td><td>继承父 Agent</td><td>可指定专用工具集</td><td>完整工具集</td></tr>
+      <tr><td>隔离级别</td><td>AsyncLocalStorage</td><td>AsyncLocalStorage</td><td>Worktree（Git 级别）</td></tr>
+      <tr><td>通信方式</td><td>返回结果</td><td>返回结果</td><td>文件系统邮箱</td></tr>
+      <tr><td>适用场景</td><td>研究、子功能实现</td><td>独立任务、专用 Agent</td><td>并行开发、复杂协作</td></tr>
+      <tr><td>运行方式</td><td>前台/后台</td><td>前台/后台</td><td>多终端并行</td></tr>
+    </tbody>
+  </table>
+
+  <!-- AsyncLocalStorage -->
+  <h2>AsyncLocalStorage 隔离</h2>
+  <p>解决同进程内多个 Agent 并发运行时的上下文隔离问题，利用 Node.js 原生能力：</p>
+  <pre><code>const teammateContextStorage = new AsyncLocalStorage&lt;TeammateContext&gt;()
+
+// 每个 Agent 在独立的 ALS 上下文中运行
+function runWithTeammateContext&lt;T&gt;(context: TeammateContext, fn: () =&gt; T): T {
+  return teammateContextStorage.run(context, fn)
+}
+
+// 任何代码路径都可以获取当前 Agent 的身份
+function getTeammateContext(): TeammateContext | undefined {
+  return teammateContextStorage.getStore()
+}</code></pre>
+  <p>无需显式传递上下文，异步调用链中自动继承，天然支持并发隔离。</p>
+
+  <!-- 邮箱通信 -->
+  <h2>邮箱通信机制</h2>
+  <p>Agent 之间通过文件系统实现的消息队列进行通信。存储路径：<code>~/.claude/teams/{team}/inbox/{agent}.jsonl</code></p>
+
+  <h3>消息类型</h3>
+  <div class="card-grid">
+    <div class="card"><div class="card-title">IdleNotification</div><div class="card-desc">空闲通知</div></div>
+    <div class="card"><div class="card-title">PermissionRequest/Response</div><div class="card-desc">权限请求与响应</div></div>
+    <div class="card"><div class="card-title">ShutdownRequest</div><div class="card-desc">关闭请求</div></div>
+    <div class="card"><div class="card-title">TaskAssignment</div><div class="card-desc">任务分配</div></div>
+    <div class="card"><div class="card-title">PlanApprovalRequest</div><div class="card-desc">计划审批</div></div>
+    <div class="card"><div class="card-title">DirectMessage</div><div class="card-desc">直接消息</div></div>
+  </div>
+  <p>基于文件系统，无需额外 IPC 机制；JSONL 格式支持增量追加；天然持久化，进程重启不丢失消息。</p>
+
+  <!-- Swarm 后端 -->
+  <h2>Swarm 协作后端</h2>
+  <table>
+    <thead><tr><th>后端</th><th>实现方式</th><th>适用场景</th></tr></thead>
+    <tbody>
+      <tr><td><code>InProcessBackend</code></td><td>同进程 + AsyncLocalStorage</td><td>默认模式，资源开销最小</td></tr>
+      <tr><td><code>TmuxBackend</code></td><td>tmux 终端分屏</td><td>需要可视化多 Agent 工作状态</td></tr>
+      <tr><td><code>ITermBackend</code></td><td>iTerm 分屏</td><td>macOS iTerm 用户</td></tr>
+    </tbody>
+  </table>
+  <p>后端选择逻辑：优先检测 iTerm → 检测 tmux → 回退到 InProcess。</p>
+
+  <!-- Worktree 隔离 -->
+  <h2>Worktree 隔离</h2>
+  <p>为需要独立代码空间的 Agent 提供 Git 级别的隔离：</p>
+  <div class="flow">
+    <div class="flow-step">git worktree add<br><small>创建独立分支</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">复制 .claude/ 配置</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">符号链接<br><small>node_modules 等</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">创建终端 session<br><small>tmux/iTerm</small></div>
+  </div>
+  <p>Agent 完成任务后，自动清理 worktree 和关联的分支。</p>
+
+  <!-- 提示词设计 -->
+  <h2>Agent 提示词设计</h2>
+  <div class="accordion">
+    <div class="accordion-item">
+      <div class="accordion-header">Fork 指导</div>
+      <div class="accordion-body"><p>告诉 Fork Agent 它继承了父上下文，应该直接执行任务而非重新收集信息。</p></div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">Don't peek</div>
+      <div class="accordion-body"><p>禁止 Agent 读取其他 Agent 的工作目录，防止并发冲突。</p></div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">Don't race</div>
+      <div class="accordion-body"><p>禁止 Agent 与其他 Agent 竞争同一资源（如同一文件）。</p></div>
+    </div>
+  </div>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">Fork 共享缓存降低成本</div>
+      <div class="card-desc">适合子任务；Subagent 独立上下文，适合需要专用工具的独立任务</div>
+    </div>
+    <div class="card">
+      <div class="card-title">AsyncLocalStorage 是关键</div>
+      <div class="card-desc">利用 Node.js 原生能力，无需显式传递上下文，异步链自动继承</div>
+    </div>
+    <div class="card">
+      <div class="card-title">文件系统邮箱最简单可靠</div>
+      <div class="card-desc">JSONL 增量追加，天然持久化，无需额外 IPC 机制</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="04-security.html">上一篇：安全与权限</a> &nbsp;|&nbsp;
+    <a href="06-context.html">下一篇：上下文管理 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

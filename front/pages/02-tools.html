@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>02 工具系统 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="01-core.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="03-prompt.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link active" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>🔧 工具系统</h1>
+  <p class="subtitle">工具即能力单元 · 自包含模块 · 声明式并发 · 动态组合</p>
+
+  <!-- 整体思路 -->
+  <h2>整体实现思路</h2>
+  <p>工具系统是 Claude Code 的能力层——AI 能做什么，完全由它拥有的工具决定。每个工具是一个<strong>自包含模块</strong>，包含输入 Schema（Zod）、执行逻辑（call）、使用说明（prompt）、权限检查（checkPermissions）、UI 渲染（render*）五个维度。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-icon">📦</div>
+      <div class="card-title">自包含</div>
+      <div class="card-desc">工具的提示词和实现放在同一目录，修改工具不需要改动核心代码</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">⚡</div>
+      <div class="card-title">声明式并发</div>
+      <div class="card-desc">每个工具声明自己是否并发安全，编排器据此决定并行/串行</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔗</div>
+      <div class="card-title">动态组合</div>
+      <div class="card-desc">内置工具 + MCP 工具 + 插件工具在运行时合并为统一工具池</div>
+    </div>
+  </div>
+
+  <!-- 工具清单 -->
+  <h2>工具清单</h2>
+  <table>
+    <thead><tr><th>分类</th><th>工具</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag tag-blue">文件</span></td><td>Read / Write / Edit</td><td>文件读取（支持图片/PDF/Notebook）、写入、精确字符串替换</td></tr>
+      <tr><td><span class="tag tag-red">Shell</span></td><td>Bash / PowerShell</td><td>Shell 命令执行，18 个文件组成最复杂的工具</td></tr>
+      <tr><td><span class="tag tag-green">搜索</span></td><td>Glob / Grep / ToolSearch</td><td>文件名搜索、内容搜索、工具搜索</td></tr>
+      <tr><td><span class="tag tag-purple">Web</span></td><td>WebSearch / WebFetch</td><td>网页搜索、网页抓取并转 Markdown</td></tr>
+      <tr><td><span class="tag tag-orange">Agent</span></td><td>Agent / SendMessage</td><td>子 Agent 派生、队友消息通信</td></tr>
+      <tr><td><span class="tag tag-blue">MCP</span></td><td>MCPTool</td><td>外部 MCP 服务器工具的统一包装</td></tr>
+      <tr><td><span class="tag tag-green">任务</span></td><td>Task* / Todo</td><td>任务管理、待办事项</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 单工具目录结构 -->
+  <h2>单工具目录结构</h2>
+  <pre><code>src/tools/SomeTool/
+├── SomeTool.ts/tsx    # 主文件 buildTool({...})
+├── prompt.ts          # 提示词（告诉 AI 怎么用）
+├── UI.tsx             # 渲染组件
+├── constants.ts       # 常量
+├── utils.ts           # 辅助函数
+└── *Security.ts       # 安全检查</code></pre>
+
+  <!-- BashTool 架构 -->
+  <h2>BashTool 架构（18 文件，最复杂）</h2>
+  <p>BashTool 是整个工具系统中最复杂的工具，涵盖安全检查、权限逻辑、命令语义分析、沙箱判断等多个子模块。</p>
+
+  <table>
+    <thead><tr><th>文件</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td><code>BashTool.tsx</code></td><td>主入口，串联所有子模块</td></tr>
+      <tr><td><code>prompt.ts</code></td><td>400 行提示词，含 Git 安全协议</td></tr>
+      <tr><td><code>bashSecurity.ts</code></td><td>安全检查总入口</td></tr>
+      <tr><td><code>bashPermissions.ts</code></td><td>权限逻辑</td></tr>
+      <tr><td><code>commandSemantics.ts</code></td><td>命令语义分析</td></tr>
+      <tr><td><code>modeValidation.ts</code></td><td>模式验证</td></tr>
+      <tr><td><code>pathValidation.ts</code></td><td>路径验证</td></tr>
+      <tr><td><code>readOnlyValidation.ts</code></td><td>只读验证</td></tr>
+      <tr><td><code>sedValidation.ts</code></td><td>sed 命令验证</td></tr>
+      <tr><td><code>shouldUseSandbox.ts</code></td><td>沙箱判断</td></tr>
+      <tr><td><code>destructiveCommandWarning.ts</code></td><td>破坏性命令警告</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 工具注册流程 -->
+  <h2>工具注册流程</h2>
+  <div class="flow">
+    <div class="flow-step">getAllBaseTools()<br><small>40+ 内置工具</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">feature flag<br><small>条件编译</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">filterToolsByDenyRules<br><small>权限过滤</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">assembleToolPool<br><small>合并 MCP 工具</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">getMergedTools<br><small>最终工具池</small></div>
+  </div>
+  <p>排序规则：内置工具（按名称）在前，MCP 工具（按名称）在后 → 保证 prompt cache 稳定性。</p>
+
+  <!-- 工具执行流水线 -->
+  <h2>工具执行流水线</h2>
+  <div class="layers">
+    <div class="layer l3">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">validateInput</div><div class="layer-desc">Zod Schema 验证输入参数</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">Pre-Tool Hooks</div><div class="layer-desc">外部钩子拦截，可修改输入或阻止执行</div></div>
+    </div>
+    <div class="layer l2">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">checkPermissions</div><div class="layer-desc">权限检查：deny &gt; ask &gt; allow</div></div>
+    </div>
+    <div class="layer l1">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">tool.call</div><div class="layer-desc">执行工具核心逻辑</div></div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-num">5</div>
+      <div><div class="layer-title">Post-Tool Hooks</div><div class="layer-desc">后处理钩子，审计日志等</div></div>
+    </div>
+    <div class="layer l6">
+      <div class="layer-num">6</div>
+      <div><div class="layer-title">mapToolResult</div><div class="layer-desc">结果转换为标准格式返回给 AI</div></div>
+    </div>
+  </div>
+
+  <!-- Shell.exec 执行流程 -->
+  <h2>Shell.exec() 执行流程</h2>
+  <div class="flow">
+    <div class="flow-step">解析 Shell Provider<br><small>bash/powershell</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">buildExecCommand</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">沙箱判断</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">spawn 子进程</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">wrapSpawn<br><small>超时/中断/输出</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">检测 CWD 变更</div>
+  </div>
+
+  <!-- MCP 工具包装 -->
+  <h2>MCP 工具包装</h2>
+  <div class="flow">
+    <div class="flow-step">MCP 服务器</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">ListTools<br><small>工具发现</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">MCPTool 包装</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">合并到工具池</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">AI 调用</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">callMCPTool<br><small>转发到服务器</small></div>
+  </div>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">工具是自包含的</div>
+      <div class="card-desc">新增工具只需创建目录，不改核心代码</div>
+    </div>
+    <div class="card">
+      <div class="card-title">提示词是工具的 API 文档</div>
+      <div class="card-desc">告诉 AI 什么时候用、怎么用、不要怎么用</div>
+    </div>
+    <div class="card">
+      <div class="card-title">readEditContext 性能优化</div>
+      <div class="card-desc">大文件只读匹配位置周围的上下文，不加载整个文件</div>
+    </div>
+    <div class="card">
+      <div class="card-title">工具排序影响 prompt cache</div>
+      <div class="card-desc">内置在前 MCP 在后，按名称排序保证稳定</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="01-core.html">上一篇：核心引擎</a> &nbsp;|&nbsp;
+    <a href="03-prompt.html">下一篇：提示词系统 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

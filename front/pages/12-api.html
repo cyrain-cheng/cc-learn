@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>12 API通信层 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="11-commands.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="13-aux.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link active" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>📡 API通信层</h1>
+  <p class="subtitle">流式优先 · 多层容错 · 成本可控 · 灵活配置</p>
+
+  <h2>整体实现思路</h2>
+  <p>API 通信层是 Claude Code 与 Claude API 之间的桥梁，负责<strong>流式交互、错误恢复、成本控制、缓存优化</strong>的全链路管理。核心文件 <code>claude.ts</code> 约 3400 行。</p>
+
+  <!-- queryModel 流程 -->
+  <h2>queryModel 核心流程</h2>
+  <div class="flow">
+    <div class="flow-step">工具 Schema 转换<br><small>toolToAPISchema</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">消息规范化<br><small>normalizeMessages</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">配置推理参数<br><small>thinking/effort/budget</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">添加缓存断点<br><small>addCacheBreakpoints</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">withRetry 流式请求</div>
+  </div>
+
+  <h3>流式事件处理</h3>
+  <div class="layers">
+    <div class="layer l3">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">message_start</div><div class="layer-desc">记录 TTFT（首 Token 时间）</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">content_block_start</div><div class="layer-desc">开始新的内容块（text / tool_use / thinking）</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">content_block_delta</div><div class="layer-desc">增量内容到达，yield 给 UI 实时渲染</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">content_block_stop</div><div class="layer-desc">内容块结束</div></div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-num">5</div>
+      <div><div class="layer-title">message_delta → message_stop</div><div class="layer-desc">更新 usage + stop_reason，流式结束</div></div>
+    </div>
+  </div>
+
+  <!-- 模型定价 -->
+  <h2>模型定价</h2>
+  <table>
+    <thead><tr><th>模型</th><th>输入 ($/Mtok)</th><th>输出 ($/Mtok)</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr><td><code>claude-opus-4-6</code></td><td>5</td><td>25</td><td>Fast: 30/150</td></tr>
+      <tr><td><code>claude-opus-4-5</code></td><td>5</td><td>25</td><td></td></tr>
+      <tr><td><code>claude-opus-4</code></td><td>15</td><td>75</td><td></td></tr>
+      <tr><td><code>claude-sonnet-4-6</code></td><td>3</td><td>15</td><td></td></tr>
+      <tr><td><code>claude-sonnet-4</code></td><td>3</td><td>15</td><td></td></tr>
+      <tr><td><code>claude-haiku-4-5</code></td><td>1</td><td>5</td><td>轻量级任务</td></tr>
+    </tbody>
+  </table>
+
+  <!-- Thinking / Effort / FastMode / Advisor -->
+  <h2>推理配置</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">Thinking 配置</div>
+      <div class="card-desc">
+        <code>adaptive</code> — AI 自行决定是否展示思考过程<br>
+        <code>enabled</code> — 强制开启，指定预算 Token 数<br>
+        <code>disabled</code> — 禁用思考过程
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Effort 级别</div>
+      <div class="card-desc">
+        <code>low</code> — 快速简短回答<br>
+        <code>medium</code> — 默认平衡<br>
+        <code>high</code> — 深度思考<br>
+        <code>max</code> — 最大推理深度
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Fast Mode</div>
+      <div class="card-desc">更快推理路径，6 倍价格换取更低延迟。被 API 拒绝后进入冷却期，自动回退到正常模式。</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Advisor Tool</div>
+      <div class="card-desc">服务端工具，让另一个 AI 模型审查主模型的工作。主模型调用 advisor → 服务端转发 → 返回审查建议。</div>
+    </div>
+  </div>
+
+  <!-- 流式健康监控 -->
+  <h2>流式健康监控</h2>
+  <table>
+    <thead><tr><th>监控层</th><th>阈值</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td>空闲看门狗</td><td>90 秒无数据</td><td>中断连接，触发重试</td></tr>
+      <tr><td>停顿检测</td><td>30 秒无数据</td><td>显示告警，继续等待</td></tr>
+      <tr><td>非流式降级</td><td>流式连续失败</td><td>切换为非流式 API 调用</td></tr>
+    </tbody>
+  </table>
+
+  <h3>重试策略</h3>
+  <div class="layers">
+    <div class="layer l3">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">网络错误</div><div class="layer-desc">指数退避重试</div></div>
+    </div>
+    <div class="layer l2">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">速率限制（429）</div><div class="layer-desc">等待 Retry-After 后重试</div></div>
+    </div>
+    <div class="layer l1">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">服务器错误（5xx）</div><div class="layer-desc">重试，可选降级到备用模型</div></div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">模型不可用</div><div class="layer-desc">自动切换到 fallback 模型</div></div>
+    </div>
+  </div>
+
+  <!-- Prompt Cache 优化 -->
+  <h2>Prompt Cache 优化</h2>
+  <table>
+    <thead><tr><th>策略</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>Beta Header 锁存</td><td>一旦发送，整个会话保持不变</td></tr>
+      <tr><td>缓存断点检测</td><td><code>checkResponseForCacheBreak()</code> — 监控 cache_read vs cache_creation</td></tr>
+      <tr><td>全局缓存作用域</td><td><code>prompt_caching_scope</code> beta — 跨用户共享缓存</td></tr>
+      <tr><td>Cached MicroCompact</td><td><code>cache_edits</code> — 编辑缓存中的内容而非重建</td></tr>
+    </tbody>
+  </table>
+
+  <!-- sideQuery -->
+  <h2>sideQuery 辅助调用</h2>
+  <p>非主循环的 API 调用封装，用于权限解释、会话搜索、模型验证、AI 分类器等辅助功能。使用更轻量的模型降低成本。</p>
+  <pre><code>await sideQuery({
+  querySource: 'permission_explainer',
+  model: 'haiku',
+  system: SYSTEM_PROMPT,
+  messages: [...],
+  tools: [...],
+  max_tokens: 1024,
+})</code></pre>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">三层健康监控</div>
+      <div class="card-desc">看门狗、停顿检测、非流式降级，确保连接可靠性</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Prompt Cache 直接影响成本</div>
+      <div class="card-desc">Beta Header 锁存和缓存断点检测是关键优化手段</div>
+    </div>
+    <div class="card">
+      <div class="card-title">重试支持模型降级</div>
+      <div class="card-desc">主模型不可用时自动切换到 fallback 模型</div>
+    </div>
+    <div class="card">
+      <div class="card-title">三维控制推理行为</div>
+      <div class="card-desc">Thinking 控制思考可见性，Effort 控制推理深度，Fast Mode 控制推理速度</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="11-commands.html">上一篇：命令与技能</a> &nbsp;|&nbsp;
+    <a href="13-aux.html">下一篇：辅助系统 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

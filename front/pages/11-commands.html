@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>11 命令与技能 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="10-ink.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="12-api.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link active" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>⌨️ 命令与技能</h1>
+  <p class="subtitle">80+ 斜杠命令 · 三种命令类型 · 技能系统 · 插件系统</p>
+
+  <h2>整体实现思路</h2>
+  <p>Claude Code 提供了 <strong>80+ 个斜杠命令 + 可扩展技能系统 + 插件系统</strong>，构成用户与 AI 交互的命令层。设计理念："轻量入口、统一注册、多源合并"。</p>
+
+  <!-- 命令类型 -->
+  <h2>命令类型</h2>
+  <table>
+    <thead><tr><th>类型</th><th>执行方式</th><th>示例</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag tag-blue">prompt</span></td><td>构建消息发送给 AI，AI 处理后返回结果</td><td><code>/commit</code>、<code>/review</code>、<code>/commit-push-pr</code></td></tr>
+      <tr><td><span class="tag tag-green">local</span></td><td>直接执行本地逻辑，不经过 AI</td><td><code>/clear</code>、<code>/compact</code>、<code>/voice</code></td></tr>
+      <tr><td><span class="tag tag-purple">local-jsx</span></td><td>渲染 React 组件（设置面板、选择器等）</td><td><code>/config</code>、<code>/resume</code>、<code>/model</code></td></tr>
+    </tbody>
+  </table>
+
+  <pre><code>type Command = {
+  type: 'prompt' | 'local' | 'local-jsx'
+  name: string
+  description: string
+  allowedTools?: string[]       // prompt 类型：限制 AI 可用的工具
+  source: 'builtin' | 'bundled' | 'plugin' | 'mcp'
+  getPromptForCommand?(args, context): ContentBlockParam[]
+  load?(): Promise&lt;{ call: CommandCall }&gt;
+}</code></pre>
+
+  <!-- 关键命令 -->
+  <h2>关键命令</h2>
+  <table>
+    <thead><tr><th>命令</th><th>类型</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>/commit</code></td><td><span class="tag tag-blue">prompt</span></td><td>分析 git diff 生成 commit message，限制工具为 git add/commit</td></tr>
+      <tr><td><code>/commit-push-pr</code></td><td><span class="tag tag-blue">prompt</span></td><td>在 /commit 基础上增加 push 和创建 PR</td></tr>
+      <tr><td><code>/clear</code></td><td><span class="tag tag-green">local</span></td><td>清除对话消息，触发 SessionEnd 钩子，重置上下文</td></tr>
+      <tr><td><code>/compact</code></td><td><span class="tag tag-green">local</span></td><td>手动触发上下文压缩</td></tr>
+      <tr><td><code>/resume</code></td><td><span class="tag tag-purple">local-jsx</span></td><td>渲染会话选择器，恢复历史会话</td></tr>
+      <tr><td><code>/branch</code></td><td><span class="tag tag-purple">local-jsx</span></td><td>从当前对话创建分支</td></tr>
+      <tr><td><code>/config</code></td><td><span class="tag tag-purple">local-jsx</span></td><td>渲染配置面板</td></tr>
+      <tr><td><code>/model</code></td><td><span class="tag tag-purple">local-jsx</span></td><td>模型选择器</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 命令注册 -->
+  <h2>命令注册与查找</h2>
+  <div class="flow">
+    <div class="flow-step">内置命令<br><small>src/commands/ 80+</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">技能命令<br><small>skills/bundled/</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">MCP 命令<br><small>MCP 服务器提供</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">插件命令<br><small>pluginLoader.ts</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">getCommands<br><small>合并所有来源</small></div>
+  </div>
+  <p>冲突处理：同名命令按来源优先级覆盖（插件 &gt; MCP &gt; 技能 &gt; 内置）。<code>findCommand</code> 支持前缀匹配，如 <code>/com</code> 可匹配 <code>/commit</code>。</p>
+
+  <!-- 技能系统 -->
+  <h2>技能系统</h2>
+  <p>技能是可发现的命令，支持自动推荐和注册。内置技能：</p>
+  <div class="card-grid">
+    <div class="card"><div class="card-title">/batch</div><div class="card-desc">批量操作</div></div>
+    <div class="card"><div class="card-title">/loop</div><div class="card-desc">循环执行</div></div>
+    <div class="card"><div class="card-title">/debug</div><div class="card-desc">调试模式</div></div>
+    <div class="card"><div class="card-title">/remember</div><div class="card-desc">记忆管理</div></div>
+    <div class="card"><div class="card-title">/keybindings</div><div class="card-desc">快捷键</div></div>
+    <div class="card"><div class="card-title">/chrome</div><div class="card-desc">Chrome 集成</div></div>
+  </div>
+  <p>技能 vs 命令：技能本质上是命令，但额外支持自动发现和推荐（AI 可以主动建议使用某个技能）。</p>
+
+  <!-- 插件系统 -->
+  <h2>插件系统</h2>
+  <p><code>pluginLoader.ts</code>（3300 行）实现了完整的插件生命周期管理。</p>
+
+  <h3>插件来源</h3>
+  <div class="flow">
+    <div class="flow-step">内置插件<br><small>builtinPlugins.ts</small></div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-step">Marketplace<br><small>官方市场</small></div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-step">Git 仓库</div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-step">NPM 包</div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-step">本地路径</div>
+  </div>
+
+  <h3>加载流程</h3>
+  <div class="flow">
+    <div class="flow-step">加载 manifest<br><small>插件元数据</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">加载 hooks<br><small>钩子注册</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">加载 skills<br><small>技能注册</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">加载 MCP servers<br><small>工具注册</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">注册到系统</div>
+  </div>
+  <p>支持语义化版本、自动更新检查、版本锁定。</p>
+
+  <!-- 用户输入处理 -->
+  <h2>用户输入处理</h2>
+  <div class="layers">
+    <div class="layer l3">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">以 / 开头 → 斜杠命令解析</div><div class="layer-desc">findCommand 查找匹配命令，未找到则建议相似命令</div></div>
+    </div>
+    <div class="layer l2">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">以 ! 开头 → Bash 命令</div><div class="layer-desc">直接执行 shell 命令</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">普通文本 → 文本提示</div><div class="layer-desc">发送给 AI 处理</div></div>
+    </div>
+  </div>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">命令是轻量入口</div>
+      <div class="card-desc">实际逻辑委托给服务层，命令本身只负责参数解析和路由</div>
+    </div>
+    <div class="card">
+      <div class="card-title">prompt 类型最巧妙</div>
+      <div class="card-desc">通过构建提示词让 AI 执行复杂任务，同时限制可用工具确保安全</div>
+    </div>
+    <div class="card">
+      <div class="card-title">四源合并统一命令池</div>
+      <div class="card-desc">内置 + 技能 + MCP + 插件在运行时合并，用户无感知</div>
+    </div>
+    <div class="card">
+      <div class="card-title">插件支持多种安装方式</div>
+      <div class="card-desc">Git、NPM、本地、Marketplace，覆盖不同分发场景</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="10-ink.html">上一篇：终端UI引擎</a> &nbsp;|&nbsp;
+    <a href="12-api.html">下一篇：API通信层 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

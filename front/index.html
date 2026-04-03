@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Code 源码解析</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="index.html" class="active">首页</a>
+    <a href="pages/01-core.html">开始阅读</a>
+  </nav>
+</header>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link active" href="index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="pages/01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="pages/02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="pages/03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="pages/04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="pages/05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="pages/06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="pages/07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="pages/08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="pages/09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="pages/10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="pages/11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="pages/12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="pages/13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<!-- Main -->
+<div class="main-wrapper">
+<div class="main">
+  <h1>Claude Code 源码解析</h1>
+  <p class="subtitle">Anthropic 官方 AI 编程助手（内部代号 Tengu）的完整源码学习指南</p>
+
+  <!-- Stats -->
+  <div class="stat-row">
+    <div class="stat-item"><div class="stat-value">800+</div><div class="stat-label">源码文件</div></div>
+    <div class="stat-item"><div class="stat-value">40+</div><div class="stat-label">内置工具</div></div>
+    <div class="stat-item"><div class="stat-value">80+</div><div class="stat-label">斜杠命令</div></div>
+    <div class="stat-item"><div class="stat-value">96</div><div class="stat-label">自定义Ink文件</div></div>
+    <div class="stat-item"><div class="stat-value">50+</div><div class="stat-label">钩子事件类型</div></div>
+  </div>
+
+  <!-- Tech Stack -->
+  <h2>技术栈</h2>
+  <div class="flow">
+    <div class="flow-step highlight">Bun 运行时</div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-step highlight">TypeScript</div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-step highlight">React</div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-step highlight">自定义 Ink</div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-step">Zod</div>
+    <span class="flow-arrow">+</span>
+    <div class="flow-step">MCP</div>
+  </div>
+
+  <!-- Core Design -->
+  <h2>核心设计理念</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-icon">🔄</div>
+      <div class="card-title">AsyncGenerator 流式架构</div>
+      <div class="card-desc">从 API 调用到工具执行到钩子系统，全链路使用 async function*，天然支持流式、中断、背压</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔧</div>
+      <div class="card-title">工具即能力</div>
+      <div class="card-desc">AI 的能力边界由工具定义，每个工具是自包含模块（Schema + 逻辑 + 提示词 + 权限 + UI）</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">🛡️</div>
+      <div class="card-title">安全内建</div>
+      <div class="card-desc">6 层纵深防御不是事后补丁，而是架构的一部分：钩子→权限→确认→沙箱→验证→提示词</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">📝</div>
+      <div class="card-title">提示词即代码</div>
+      <div class="card-desc">通过函数动态生成，支持条件编译、运行时注入、缓存优化，直接影响 API 成本</div>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <h2>模块索引</h2>
+  <p style="margin-bottom:12px"><input id="module-search" type="text" placeholder="搜索模块..." style="width:100%;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.9rem;outline:none;"></p>
+
+  <!-- Module Cards -->
+  <div class="card-grid">
+    <a class="card" href="pages/01-core.html" data-keywords="核心引擎 query queryLoop Tool 对话循环 工具编排 流式执行">
+      <div class="card-icon">⚙️</div>
+      <div class="card-title">01 核心引擎 <span class="tag tag-red">核心</span></div>
+      <div class="card-desc">queryLoop 对话循环、Tool 基类、工具编排、StreamingToolExecutor 流式执行</div>
+    </a>
+    <a class="card" href="pages/02-tools.html" data-keywords="工具系统 Bash File Edit Read Write Glob Grep Agent Web MCP">
+      <div class="card-icon">🔧</div>
+      <div class="card-title">02 工具系统 <span class="tag tag-red">核心</span></div>
+      <div class="card-desc">40+ 内置工具的设计模式、注册流程、执行流水线、并发控制</div>
+    </a>
+    <a class="card" href="pages/03-prompt.html" data-keywords="提示词 prompt 系统提示词 CLAUDE.md 附件 缓存 cache">
+      <div class="card-icon">📝</div>
+      <div class="card-title">03 提示词系统 <span class="tag tag-orange">重要</span></div>
+      <div class="card-desc">系统提示词构建、8种工具提示词设计模式、60+种上下文附件、缓存优化</div>
+    </a>
+    <a class="card" href="pages/04-security.html" data-keywords="安全 权限 沙箱 sandbox permission hook 钩子">
+      <div class="card-icon">🛡️</div>
+      <div class="card-title">04 安全与权限 <span class="tag tag-red">核心</span></div>
+      <div class="card-desc">6层纵深防御、沙箱隔离、权限规则、自动模式、Unicode净化</div>
+    </a>
+    <a class="card" href="pages/05-agent.html" data-keywords="Agent Fork Swarm Teammate Worktree 多Agent 协作">
+      <div class="card-icon">🤖</div>
+      <div class="card-title">05 多Agent系统 <span class="tag tag-orange">重要</span></div>
+      <div class="card-desc">Fork/Subagent/Teammate 三种模式、AsyncLocalStorage隔离、邮箱通信</div>
+    </a>
+    <a class="card" href="pages/06-context.html" data-keywords="上下文 compact 压缩 记忆 memory dream token">
+      <div class="card-icon">🧠</div>
+      <div class="card-title">06 上下文管理 <span class="tag tag-orange">重要</span></div>
+      <div class="card-desc">AutoCompact/MicroCompact/PartialCompact、记忆提取、Auto Dream</div>
+    </a>
+    <a class="card" href="pages/07-mcp.html" data-keywords="MCP 协议 客户端 服务器 OAuth 工具发现">
+      <div class="card-icon">🔌</div>
+      <div class="card-title">07 MCP协议 <span class="tag tag-blue">扩展</span></div>
+      <div class="card-desc">MCP客户端/服务器双端实现、工具发现、OAuth认证、连接管理</div>
+    </a>
+    <a class="card" href="pages/08-hooks.html" data-keywords="钩子 hook 事件 PreToolUse PostToolUse Session">
+      <div class="card-icon">🪝</div>
+      <div class="card-title">08 钩子系统 <span class="tag tag-blue">扩展</span></div>
+      <div class="card-desc">50+事件类型、命令/HTTP/回调三种执行方式、结构化JSON输出</div>
+    </a>
+    <a class="card" href="pages/09-state.html" data-keywords="状态 store AppState bootstrap React Context">
+      <div class="card-icon">📦</div>
+      <div class="card-title">09 状态管理 <span class="tag tag-green">基础</span></div>
+      <div class="card-desc">30行Store实现、AppState、bootstrap/state全局状态中心</div>
+    </a>
+    <a class="card" href="pages/10-ink.html" data-keywords="终端 UI Ink Yoga 布局 Screen diff 渲染 组件">
+      <div class="card-icon">🖥️</div>
+      <div class="card-title">10 终端UI引擎 <span class="tag tag-purple">深度</span></div>
+      <div class="card-desc">96文件自定义Ink、纯TS Yoga布局、Screen diff增量渲染、事件系统</div>
+    </a>
+    <a class="card" href="pages/11-commands.html" data-keywords="命令 技能 插件 skill plugin command 斜杠">
+      <div class="card-icon">⌨️</div>
+      <div class="card-title">11 命令与技能 <span class="tag tag-green">基础</span></div>
+      <div class="card-desc">80+斜杠命令、技能系统、插件系统、Marketplace</div>
+    </a>
+    <a class="card" href="pages/12-api.html" data-keywords="API 通信 流式 重试 成本 thinking effort fast advisor">
+      <div class="card-icon">📡</div>
+      <div class="card-title">12 API通信层 <span class="tag tag-orange">重要</span></div>
+      <div class="card-desc">Claude API流式调用、重试降级、成本追踪、Thinking/Effort/FastMode</div>
+    </a>
+    <a class="card" href="pages/13-aux.html" data-keywords="辅助 认证 配置 存储 遥测 bridge teleport bash chrome">
+      <div class="card-icon">🔩</div>
+      <div class="card-title">13 辅助系统 <span class="tag tag-green">基础</span></div>
+      <div class="card-desc">认证(6种)、配置、会话存储、遥测、Bridge远程、Bash解析器</div>
+    </a>
+  </div>
+
+  <!-- Architecture Overview -->
+  <h2>整体架构</h2>
+  <div class="layers">
+    <div class="layer l1">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">入口层</div><div class="layer-desc">CLI (main.tsx) · MCP Server (mcp.ts) · SDK (sdk/)</div></div>
+    </div>
+    <div class="layer l2">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">交互层</div><div class="layer-desc">REPL 循环 · 80+ 斜杠命令 · 技能系统 · 插件系统</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">核心引擎</div><div class="layer-desc">QueryEngine · queryLoop 对话循环 · 提示词构建 · 工具编排</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">能力层</div><div class="layer-desc">40+ 工具 · 多Agent · MCP客户端 · 上下文管理 · 钩子系统</div></div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-num">5</div>
+      <div><div class="layer-title">安全层</div><div class="layer-desc">6层纵深防御 · 沙箱隔离 · 权限规则 · Unicode净化</div></div>
+    </div>
+    <div class="layer l6">
+      <div class="layer-num">6</div>
+      <div><div class="layer-title">基础设施</div><div class="layer-desc">状态管理 · API通信 · 终端UI引擎 · 认证 · 配置 · 遥测 · 存储</div></div>
+    </div>
+  </div>
+
+  <!-- Data Flow -->
+  <h2>数据流全景</h2>
+  <div class="flow">
+    <div class="flow-step">用户输入</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">上下文构建<br><small>CLAUDE.md + 记忆 + 附件</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">queryLoop<br><small>对话循环核心</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">Claude API<br><small>流式请求</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">工具编排<br><small>并发/串行执行</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">安全检查<br><small>6层防御</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">结果渲染<br><small>终端UI</small></div>
+  </div>
+
+  <!-- Reading Guide -->
+  <h2>推荐阅读顺序</h2>
+  <div class="accordion">
+    <div class="accordion-item open">
+      <div class="accordion-header">🚀 快速了解（30分钟）</div>
+      <div class="accordion-body">
+        <p>1. <a href="pages/01-core.html">核心引擎</a> — 理解 queryLoop 对话循环</p>
+        <p>2. <a href="pages/02-tools.html">工具系统</a> — 理解工具即能力的设计</p>
+        <p>3. <a href="pages/04-security.html">安全与权限</a> — 理解 6 层纵深防御</p>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">📚 深入学习（2小时）</div>
+      <div class="accordion-body">
+        <p>4. <a href="pages/03-prompt.html">提示词系统</a> — 学习工业级提示词工程</p>
+        <p>5. <a href="pages/05-agent.html">多Agent系统</a> — 理解 Fork/Swarm 协作</p>
+        <p>6. <a href="pages/06-context.html">上下文管理</a> — 理解压缩和记忆策略</p>
+        <p>7. <a href="pages/12-api.html">API通信层</a> — 理解流式调用和成本优化</p>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">🔬 完整研究（半天）</div>
+      <div class="accordion-body">
+        <p>8. <a href="pages/07-mcp.html">MCP协议</a> — 理解外部工具集成</p>
+        <p>9. <a href="pages/08-hooks.html">钩子系统</a> — 理解可扩展性设计</p>
+        <p>10. <a href="pages/09-state.html">状态管理</a> — 理解轻量级状态方案</p>
+        <p>11. <a href="pages/10-ink.html">终端UI引擎</a> — 理解自定义渲染引擎</p>
+        <p>12. <a href="pages/11-commands.html">命令与技能</a> — 理解命令和插件系统</p>
+        <p>13. <a href="pages/13-aux.html">辅助系统</a> — 理解基础设施层</p>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script src="js/main.js"></script>
+</body>
+</html>

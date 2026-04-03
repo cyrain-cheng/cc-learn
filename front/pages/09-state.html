@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>09 状态管理 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="08-hooks.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="10-ink.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link active" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>📦 状态管理</h1>
+  <p class="subtitle">30 行 Store · AppState · bootstrap/state.ts 全局状态中心 · React 集成</p>
+
+  <h2>整体实现思路</h2>
+  <p>Claude Code 采用<strong>轻量级自研 Store + 全局状态中心</strong>的状态管理方案，刻意避免了 Redux 等重型框架。核心理念："够用就好"——30 行代码实现完整的发布-订阅 Store，配合 React 的 <code>useSyncExternalStore</code> 实现 UI 同步。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-icon">✨</div>
+      <div class="card-title">极简 Store</div>
+      <div class="card-desc">30 行实现发布-订阅，Object.is 比较避免无效更新</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔀</div>
+      <div class="card-title">双轨状态</div>
+      <div class="card-desc">React 状态走 AppState Store，非 React 状态走 bootstrap/state.ts</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">⚡</div>
+      <div class="card-title">副作用分离</div>
+      <div class="card-desc">状态变更的副作用通过 onChangeAppState 集中处理</div>
+    </div>
+  </div>
+
+  <!-- 30行 Store -->
+  <h2>30 行 Store 实现</h2>
+  <pre><code>function createStore&lt;T&gt;(initialState: T, onChange?: OnChange&lt;T&gt;): Store&lt;T&gt; {
+  let state = initialState
+  const listeners = new Set&lt;Listener&gt;()
+  return {
+    getState: () =&gt; state,
+    setState: (updater) =&gt; {
+      const prev = state
+      const next = updater(prev)
+      if (Object.is(next, prev)) return  // 引用相等跳过
+      state = next
+      onChange?.({ newState: next, oldState: prev })
+      for (const listener of listeners) listener()
+    },
+    subscribe: (listener) =&gt; {
+      listeners.add(listener)
+      return () =&gt; listeners.delete(listener)
+    },
+  }
+}</code></pre>
+  <p><code>Object.is</code> 比较：引用相等时跳过更新。<code>subscribe</code> 返回取消函数：符合 React <code>useSyncExternalStore</code> 接口。</p>
+
+  <!-- AppState 结构 -->
+  <h2>AppState 结构</h2>
+  <pre><code>type AppState = {
+  messages: Message[]                    // 对话消息列表
+  tasks: Record&lt;string, TaskState&gt;       // 工具执行任务状态
+  inProgressToolUseIDs: Set&lt;string&gt;      // 正在执行的工具 ID
+  toolPermissionContext: ToolPermissionContext
+  mcp: {
+    clients: MCPClient[]
+    tools: MCPTool[]
+    commands: MCPCommand[]
+    resources: MCPResource[]
+  }
+  mainLoopModel: string                  // 当前主模型
+  sessionId: string                      // 会话 ID
+  effortValue: EffortValue               // 推理努力级别
+  fastMode: boolean                      // 快速模式
+  advisorModel?: string                  // 顾问模型
+  fileHistory: { snapshots, trackedFiles }
+  attribution: AttributionState
+}</code></pre>
+
+  <!-- bootstrap/state.ts -->
+  <h2>bootstrap/state.ts（1755 行全局状态中心）</h2>
+  <p>管理所有非 React 的全局运行时状态，通过 100+ getter/setter 暴露。这些状态不需要触发 React 渲染，放在 React 体系外避免不必要的重渲染开销。</p>
+
+  <table>
+    <thead><tr><th>类别</th><th>示例 getter/setter</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag tag-blue">会话</span></td><td><code>getSessionId()</code> / <code>regenerateSessionId()</code> / <code>getOriginalCwd()</code></td></tr>
+      <tr><td><span class="tag tag-green">成本</span></td><td><code>getTotalCostUSD()</code> / <code>addToTotalSessionCost()</code> / <code>getTotalInputTokens()</code></td></tr>
+      <tr><td><span class="tag tag-orange">模型</span></td><td><code>getMainLoopModelOverride()</code> / <code>setMainLoopModelOverride()</code></td></tr>
+      <tr><td><span class="tag tag-purple">Beta Header</span></td><td><code>getAfkModeHeaderLatched()</code> / <code>clearBetaHeaderLatches()</code></td></tr>
+      <tr><td><span class="tag tag-red">遥测</span></td><td><code>getSessionCounter()</code> / <code>getLocCounter()</code> / <code>getPrCounter()</code></td></tr>
+      <tr><td><span class="tag tag-blue">Cron</span></td><td><code>getSessionCronTasks()</code> / <code>addSessionCronTask()</code></td></tr>
+    </tbody>
+  </table>
+
+  <!-- React 集成 -->
+  <h2>React 集成</h2>
+  <pre><code>// Provider：创建 Store 并通过 Context 传递
+function AppStateProvider({ initialState, onChangeAppState, children }) {
+  const store = createStore(initialState, onChangeAppState)
+  return (
+    &lt;AppStateContext.Provider value={store}&gt;
+      {children}
+    &lt;/AppStateContext.Provider&gt;
+  )
+}
+
+// Hook：使用 selector 订阅特定状态片段
+function useAppState&lt;T&gt;(selector: (state: AppState) =&gt; T): T {
+  const store = useAppStore()
+  return useSyncExternalStore(
+    store.subscribe,
+    () =&gt; selector(store.getState())
+  )
+}</code></pre>
+  <p><code>selector</code> 模式确保组件只在关心的状态片段变化时重渲染。</p>
+
+  <!-- 状态更新数据流 -->
+  <h2>状态更新数据流</h2>
+  <div class="flow">
+    <div class="flow-step">触发源<br><small>API/工具/用户/MCP</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">store.setState(updater)</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">Object.is 比较</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">更新 state</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">onChange 回调<br><small>副作用处理</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">通知 listeners<br><small>React 重渲染</small></div>
+  </div>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">30 行 Store 够用就好</div>
+      <div class="card-desc">不需要 Redux 的复杂性，发布-订阅 + Object.is 比较足够</div>
+    </div>
+    <div class="card">
+      <div class="card-title">双轨状态管理</div>
+      <div class="card-desc">React 状态走 Store，非 React 状态走 bootstrap/state.ts，各司其职</div>
+    </div>
+    <div class="card">
+      <div class="card-title">useSyncExternalStore 是桥梁</div>
+      <div class="card-desc">将外部 Store 与 React 渲染周期同步</div>
+    </div>
+    <div class="card">
+      <div class="card-title">selector 模式优化性能</div>
+      <div class="card-desc">组件只订阅关心的状态片段，避免无关更新触发重渲染</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="08-hooks.html">上一篇：钩子系统</a> &nbsp;|&nbsp;
+    <a href="10-ink.html">下一篇：终端UI引擎 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

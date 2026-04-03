@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>07 MCP协议 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="06-context.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="08-hooks.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link active" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>🔌 MCP协议</h1>
+  <p class="subtitle">客户端 + 服务器双端 · 三种传输方式 · OAuth 认证 · 透明集成</p>
+
+  <h2>整体实现思路</h2>
+  <p>MCP（Model Context Protocol）是标准化的 AI 工具扩展协议。Claude Code 同时实现了<strong>客户端</strong>和<strong>服务器</strong>两端。作为客户端连接外部 MCP 服务器获取额外工具能力；作为服务器将自身 40+ 内置工具暴露给其他 MCP 客户端。</p>
+
+  <!-- 客户端功能 -->
+  <h2>客户端功能</h2>
+  <h3>连接管理</h3>
+  <table>
+    <thead><tr><th>传输方式</th><th>协议</th><th>适用场景</th></tr></thead>
+    <tbody>
+      <tr><td><code>Stdio</code></td><td>标准输入/输出</td><td>本地进程，如 Python/Node 脚本</td></tr>
+      <tr><td><code>SSE</code></td><td>HTTP Server-Sent Events</td><td>远程 HTTP 服务器</td></tr>
+      <tr><td><code>WebSocket</code></td><td>WebSocket 双向通信</td><td>远程实时通信服务器</td></tr>
+    </tbody>
+  </table>
+
+  <h3>OAuth 认证</h3>
+  <div class="flow">
+    <div class="flow-step">请求认证端点</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">浏览器授权</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">接收授权码</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">交换 access_token</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">后续请求携带 token</div>
+  </div>
+
+  <h3>工具管理</h3>
+  <div class="flow">
+    <div class="flow-step">MCP 服务器</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">ListTools<br><small>工具发现</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">MCPTool 包装<br><small>转为内置格式</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">合并到工具池<br><small>AI 可见</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">AI 调用 → CallTool<br><small>转发到服务器</small></div>
+  </div>
+  <p>结果转换（<code>transformMCPResult</code>）：文本 → 直接返回，图片 → Base64 编码，二进制 → 保存到磁盘返回路径。</p>
+
+  <!-- 服务器模式 -->
+  <h2>服务器模式</h2>
+  <p>Claude Code 自身可作为 MCP 服务器（<code>entrypoints/mcp.ts</code>），暴露内置工具给外部客户端：</p>
+  <pre><code>async function startMCPServer(cwd, debug, verbose) {
+  const server = new Server({ name: 'claude/tengu', version: MACRO.VERSION })
+
+  // 暴露所有内置工具
+  server.setRequestHandler(ListToolsRequestSchema, async () =&gt; {
+    const tools = getTools(emptyPermissionContext)
+    return { tools: tools.map(tool =&gt; ({
+      description: await tool.prompt({...}),
+      inputSchema: zodToJsonSchema(tool.inputSchema),
+    }))}
+  })
+
+  // 处理工具调用
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }) =&gt; {
+    const tool = findToolByName(tools, params.name)
+    const result = await tool.call(params.arguments, context)
+    return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+  })
+}</code></pre>
+  <p>应用场景：其他 AI 工具或编辑器可以通过 MCP 协议调用 Claude Code 的文件操作、搜索、Git 等能力。</p>
+
+  <!-- 连接批量管理 -->
+  <h2>连接批量管理</h2>
+  <table>
+    <thead><tr><th>类型</th><th>并发数</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>本地服务器</td><td>batch = 5</td><td>Stdio 传输，资源开销小</td></tr>
+      <tr><td>远程服务器</td><td>batch = 3</td><td>SSE/WebSocket，需要网络连接</td></tr>
+    </tbody>
+  </table>
+  <pre><code>// 并行连接，但限制并发数
+async function processBatched&lt;T&gt;(items, batchSize, fn) {
+  for (let i = 0; i &lt; items.length; i += batchSize) {
+    await Promise.all(items.slice(i, i + batchSize).map(fn))
+  }
+}</code></pre>
+
+  <!-- Chrome 集成 -->
+  <h2>Chrome 集成</h2>
+  <p>通过 Chrome Native Messaging Host（<code>src/utils/claudeInChrome/</code> 7 文件）将 MCP 能力扩展到浏览器。Chrome 扩展通过 Native Messaging 与 Claude Code 通信，Claude Code 作为 MCP 服务器处理来自浏览器的请求。</p>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">MCP 是双向的</div>
+      <div class="card-desc">同时是客户端（使用外部工具）和服务器（暴露内置工具）</div>
+    </div>
+    <div class="card">
+      <div class="card-title">MCPTool 包装实现透明集成</div>
+      <div class="card-desc">外部工具在 AI 视角与内置工具完全一致</div>
+    </div>
+    <div class="card">
+      <div class="card-title">批量并行连接控制并发</div>
+      <div class="card-desc">本地 batch=5，远程 batch=3，避免资源耗尽</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="06-context.html">上一篇：上下文管理</a> &nbsp;|&nbsp;
+    <a href="08-hooks.html">下一篇：钩子系统 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

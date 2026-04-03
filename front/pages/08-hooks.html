@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>08 钩子系统 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="07-mcp.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="09-state.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link active" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>🪝 钩子系统</h1>
+  <p class="subtitle">50+ 事件类型 · 模式匹配 · 结构化输出 · 三种执行方式</p>
+
+  <h2>整体实现思路</h2>
+  <p>钩子系统是 Claude Code 的<strong>事件驱动可扩展性框架</strong>，支持 50+ 种事件类型，允许外部脚本和内部回调在关键节点拦截、修改、扩展 AI 的行为。设计理念："不修改核心代码，通过事件订阅实现定制化"。</p>
+
+  <!-- 事件类型表格 -->
+  <h2>50+ 事件类型</h2>
+  <table>
+    <thead><tr><th>事件类型</th><th>触发时机</th><th>典型用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>PreToolUse</code></td><td>工具执行前</td><td>拦截危险操作、修改工具输入</td></tr>
+      <tr><td><code>PostToolUse</code></td><td>工具执行后</td><td>审计日志、结果后处理</td></tr>
+      <tr><td><code>PostToolUseFailure</code></td><td>工具执行失败后</td><td>错误监控、自动恢复</td></tr>
+      <tr><td><code>PermissionRequest</code></td><td>权限请求时</td><td>自定义审批逻辑</td></tr>
+      <tr><td><code>PermissionDenied</code></td><td>权限被拒绝时</td><td>拒绝统计、告警</td></tr>
+      <tr><td><code>SessionStart</code></td><td>会话开始</td><td>初始化、环境检查</td></tr>
+      <tr><td><code>SessionEnd</code></td><td>会话结束</td><td>清理、报告生成</td></tr>
+      <tr><td><code>Stop</code></td><td>AI 停止响应</td><td>后处理、通知</td></tr>
+      <tr><td><code>UserPromptSubmit</code></td><td>用户提交消息</td><td>输入预处理、过滤</td></tr>
+      <tr><td><code>SubagentStart</code></td><td>子 Agent 启动</td><td>Agent 监控</td></tr>
+      <tr><td><code>PreCompact / PostCompact</code></td><td>压缩前/后</td><td>压缩策略定制</td></tr>
+      <tr><td><code>FileChanged</code></td><td>文件变更</td><td>自动格式化、lint</td></tr>
+      <tr><td><code>CwdChanged</code></td><td>工作目录变更</td><td>环境切换</td></tr>
+      <tr><td><code>Notification</code></td><td>后台任务通知</td><td>桌面通知</td></tr>
+      <tr><td><code>WorktreeCreate</code></td><td>Worktree 创建</td><td>Agent 隔离监控</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 执行流程 -->
+  <h2>执行流程</h2>
+  <div class="flow">
+    <div class="flow-step">系统事件触发</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">收集所有钩子源<br><small>内置 + 配置 + 插件</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">getMatchingHooks<br><small>模式匹配 + 条件判断</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">hookDedupKey 去重</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">依次执行钩子</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">验证输出 Schema</div>
+  </div>
+
+  <!-- 匹配流程 -->
+  <h3>匹配逻辑</h3>
+  <div class="layers">
+    <div class="layer l3">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">事件类型匹配</div><div class="layer-desc">钩子注册的事件类型与当前事件一致</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">Matcher 匹配</div><div class="layer-desc">工具名 Glob 匹配 → Regex 匹配（用于 PreToolUse/PostToolUse）</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">条件表达式求值</div><div class="layer-desc">可选的条件表达式，为 true 时才匹配</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">去重</div><div class="layer-desc">hookDedupKey 确保相同钩子对同一事件只执行一次</div></div>
+    </div>
+  </div>
+
+  <!-- 输出 Schema -->
+  <h2>输出 Schema</h2>
+  <div class="accordion">
+    <div class="accordion-item">
+      <div class="accordion-header">通用字段</div>
+      <div class="accordion-body">
+        <pre><code>continue: boolean       // 是否继续执行
+suppressOutput: boolean // 隐藏钩子输出
+stopReason: string      // 停止原因
+decision: 'approve' | 'block'  // 权限决策
+reason: string          // 决策原因
+systemMessage: string   // 显示给用户的警告</code></pre>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">PreToolUse 特有输出</div>
+      <div class="accordion-body">
+        <pre><code>hookSpecificOutput: {
+  hookEventName: 'PreToolUse',
+  permissionDecision: ...,    // 覆盖权限决策
+  updatedInput: {...},        // 修改工具输入参数
+  additionalContext: '...',   // 注入额外上下文
+}</code></pre>
+      </div>
+    </div>
+    <div class="accordion-item">
+      <div class="accordion-header">SessionStart 特有输出</div>
+      <div class="accordion-body">
+        <pre><code>hookSpecificOutput: {
+  hookEventName: 'SessionStart',
+  initialUserMessage: '...',  // 设置初始用户消息
+  watchPaths: ['...'],        // 注册文件监听路径
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- 三种执行方式 -->
+  <h2>三种执行方式</h2>
+  <table>
+    <thead><tr><th>方式</th><th>实现</th><th>适用场景</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag tag-blue">命令行脚本</span></td><td><code>execCommandHook</code> 执行 shell 命令</td><td>本地脚本、CI/CD 集成</td></tr>
+      <tr><td><span class="tag tag-green">HTTP Webhook</span></td><td>发送 HTTP POST 请求</td><td>远程服务、微服务架构</td></tr>
+      <tr><td><span class="tag tag-purple">内部回调</span></td><td>直接调用 JS 函数</td><td>插件系统、内置扩展</td></tr>
+    </tbody>
+  </table>
+  <p>命令行脚本通过环境变量传递事件上下文，stdout 输出作为 JSON 解析，支持超时控制。</p>
+
+  <!-- 配置示例 -->
+  <h2>配置示例</h2>
+  <pre><code>{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "pattern": "rm -rf *",
+        "type": "command",
+        "command": "/path/to/safety-check.sh"
+      }
+    ],
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "echo '{\"hookSpecificOutput\":{...}}'"
+      }
+    ]
+  }
+}</code></pre>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">钩子是最大的可扩展性入口</div>
+      <div class="card-desc">50+ 事件类型覆盖 AI 工作流的所有关键节点</div>
+    </div>
+    <div class="card">
+      <div class="card-title">PreToolUse 最强大</div>
+      <div class="card-desc">可以修改权限决策和工具输入，实现深度定制</div>
+    </div>
+    <div class="card">
+      <div class="card-title">结构化输出确保可控性</div>
+      <div class="card-desc">Zod Schema 验证返回值，防止格式错误导致系统异常</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="07-mcp.html">上一篇：MCP协议</a> &nbsp;|&nbsp;
+    <a href="09-state.html">下一篇：状态管理 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>

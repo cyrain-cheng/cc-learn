@@ -1,0 +1,25 @@
+name: Deploy to Aliyun
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'front/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via rsync
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avzr --delete --chmod=D755,F644
+          path: front/
+          remote_path: /var/www/cc-learn/
+          remote_host: ${{ secrets.SERVER_IP }}
+          remote_user: ${{ secrets.SERVER_USER }}
+          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}

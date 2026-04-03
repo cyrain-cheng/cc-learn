@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>04 安全与权限 - Claude Code 源码解析</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+<header class="header">
+  <button class="menu-toggle">☰</button>
+  <div class="header-logo"><span class="icon">⚡</span> Claude Code 源码解析</div>
+  <nav class="header-nav">
+    <a href="03-prompt.html">← 上一篇</a>
+    <a href="../index.html">首页</a>
+    <a href="05-agent.html">下一篇 →</a>
+  </nav>
+</header>
+
+<nav class="sidebar">
+  <div class="sidebar-section">
+    <div class="sidebar-title">导航</div>
+    <a class="sidebar-link" href="../index.html">🏠 首页总览</a>
+  </div>
+  <div class="sidebar-section">
+    <div class="sidebar-title">模块解析</div>
+    <a class="sidebar-link" href="01-core.html"><span class="num">01</span> 核心引擎</a>
+    <a class="sidebar-link" href="02-tools.html"><span class="num">02</span> 工具系统</a>
+    <a class="sidebar-link" href="03-prompt.html"><span class="num">03</span> 提示词系统</a>
+    <a class="sidebar-link active" href="04-security.html"><span class="num">04</span> 安全与权限</a>
+    <a class="sidebar-link" href="05-agent.html"><span class="num">05</span> 多Agent系统</a>
+    <a class="sidebar-link" href="06-context.html"><span class="num">06</span> 上下文管理</a>
+    <a class="sidebar-link" href="07-mcp.html"><span class="num">07</span> MCP协议</a>
+    <a class="sidebar-link" href="08-hooks.html"><span class="num">08</span> 钩子系统</a>
+    <a class="sidebar-link" href="09-state.html"><span class="num">09</span> 状态管理</a>
+    <a class="sidebar-link" href="10-ink.html"><span class="num">10</span> 终端UI引擎</a>
+    <a class="sidebar-link" href="11-commands.html"><span class="num">11</span> 命令与技能</a>
+    <a class="sidebar-link" href="12-api.html"><span class="num">12</span> API通信层</a>
+    <a class="sidebar-link" href="13-aux.html"><span class="num">13</span> 辅助系统</a>
+  </div>
+</nav>
+
+<div class="main-wrapper"><div class="main">
+  <h1>🛡️ 安全与权限</h1>
+  <p class="subtitle">6 层纵深防御 · 最小权限 · 智能审批 · 熔断降级</p>
+
+  <h2>整体实现思路</h2>
+  <p>安全体系遵循"<strong>安全是架构的一部分，而非事后补丁</strong>"的设计理念。6 层纵深防御体系从外部钩子拦截到内部提示词约束，层层递进、互为兜底。任何一层被突破，下一层仍然能够阻止危险操作。</p>
+
+  <!-- 6层纵深防御 -->
+  <h2>6 层纵深防御</h2>
+  <div class="layers">
+    <div class="layer l1">
+      <div class="layer-num">1</div>
+      <div><div class="layer-title">外部拦截 — Pre-Tool Hooks</div><div class="layer-desc">外部脚本拦截工具调用，支持 block / approve / 修改输入</div></div>
+    </div>
+    <div class="layer l2">
+      <div class="layer-num">2</div>
+      <div><div class="layer-title">规则匹配 — 权限规则</div><div class="layer-desc">deny &gt; ask &gt; allow 优先级，来源：user / project / managed</div></div>
+    </div>
+    <div class="layer l3">
+      <div class="layer-num">3</div>
+      <div><div class="layer-title">智能审批 — AI 分类器</div><div class="layer-desc">自动模式下 Haiku 模型判断操作安全性，只能"放行"或"上报"</div></div>
+    </div>
+    <div class="layer l4">
+      <div class="layer-num">4</div>
+      <div><div class="layer-title">用户确认 — 权限对话框</div><div class="layer-desc">允许一次 / 始终允许 / 拒绝，支持超时自动拒绝</div></div>
+    </div>
+    <div class="layer l5">
+      <div class="layer-num">5</div>
+      <div><div class="layer-title">执行隔离 — 沙箱系统</div><div class="layer-desc">文件系统 + 网络限制，通过 SandboxManager 注入</div></div>
+    </div>
+    <div class="layer l6">
+      <div class="layer-num">6</div>
+      <div><div class="layer-title">行为约束 — 提示词</div><div class="layer-desc">NEVER 规则 + Git 安全协议，"软防线"与"硬防线"配合</div></div>
+    </div>
+  </div>
+
+  <!-- 权限模式 -->
+  <h2>权限模式</h2>
+  <table>
+    <thead><tr><th>模式</th><th>行为</th><th>适用场景</th></tr></thead>
+    <tbody>
+      <tr><td><code>default</code></td><td>每次工具调用都需要用户确认</td><td>安全优先的交互式使用</td></tr>
+      <tr><td><code>auto</code></td><td>AI 分类器自动审批安全操作</td><td>自动化任务、CI/CD</td></tr>
+      <tr><td><code>plan</code></td><td>只允许只读工具，写入需确认</td><td>代码审查、分析</td></tr>
+      <tr><td><code>bypassPermissions</code></td><td>跳过所有权限检查</td><td>⚠️ 危险，仅限测试</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 自动模式流程 -->
+  <h2>自动模式审批流程</h2>
+  <div class="flow">
+    <div class="flow-step">工具调用</div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">白名单检查<br><small>只读工具直接放行</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">AI 分类器<br><small>Haiku 模型判断</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">安全 → 自动批准</div>
+  </div>
+  <div class="flow">
+    <div class="flow-step" style="visibility:hidden">占位</div>
+    <span class="flow-arrow" style="visibility:hidden">→</span>
+    <div class="flow-step" style="visibility:hidden">占位</div>
+    <span class="flow-arrow" style="visibility:hidden">→</span>
+    <div class="flow-step" style="visibility:hidden">占位</div>
+    <span class="flow-arrow">↘</span>
+    <div class="flow-step">危险/不确定 → 用户确认</div>
+  </div>
+
+  <!-- 沙箱系统 -->
+  <h2>沙箱系统配置</h2>
+  <h3>文件系统限制</h3>
+  <table>
+    <thead><tr><th>操作</th><th>策略</th><th>示例</th></tr></thead>
+    <tbody>
+      <tr><td>读取</td><td>拒绝列表</td><td><code>/etc/shadow</code>、<code>~/.ssh/*</code> 等敏感路径</td></tr>
+      <tr><td>写入</td><td>允许列表 + 拒绝列表</td><td>仅 <code>$CWD</code> 和 <code>$TMPDIR</code>；拒绝 <code>.env</code>、<code>credentials.json</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>网络限制</h3>
+  <table>
+    <thead><tr><th>策略</th><th>示例</th></tr></thead>
+    <tbody>
+      <tr><td>允许列表</td><td><code>github.com</code>、<code>api.anthropic.com</code> 等</td></tr>
+      <tr><td>拒绝列表</td><td><code>*.internal</code> 等内部域名</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 自动模式熔断 -->
+  <h2>自动模式熔断</h2>
+  <p><code>denialTracking.ts</code> 追踪连续被拒绝的次数。当连续拒绝超过阈值时，自动从 <code>auto</code> 模式降级为 <code>default</code>（手动）模式，防止 AI 在权限不足时无限重试。</p>
+
+  <!-- Unicode 净化 -->
+  <h2>Unicode 安全净化</h2>
+  <p>防御 ASCII Smuggling 和隐藏提示词注入攻击。<code>sanitization.ts</code> 实现迭代净化：</p>
+  <div class="flow">
+    <div class="flow-step">NFKC 规范化<br><small>统一等价字符</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">移除危险类别<br><small>格式字符/私用区/未分配</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step">移除零宽字符<br><small>方向控制字符</small></div>
+    <span class="flow-arrow">→</span>
+    <div class="flow-step highlight">迭代至稳定<br><small>最多 10 次</small></div>
+  </div>
+
+  <!-- 环境变量清洗 -->
+  <h2>子进程环境变量清洗</h2>
+  <p>在 CI/CD 环境中，<code>subprocessEnv.ts</code> 从子进程环境中移除 20+ 个敏感变量：</p>
+  <pre><code>const GHA_SUBPROCESS_SCRUB = [
+  'ANTHROPIC_API_KEY',
+  'AWS_SECRET_ACCESS_KEY',
+  'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+  'GITHUB_TOKEN',
+  // ... 20+ 个敏感变量
+]</code></pre>
+
+  <!-- 学习要点 -->
+  <h2>学习要点</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">纵深防御是核心理念</div>
+      <div class="card-desc">6 层防线互为兜底，任何单层被突破都有下一层保护</div>
+    </div>
+    <div class="card">
+      <div class="card-title">deny &gt; ask &gt; allow</div>
+      <div class="card-desc">权限规则的匹配顺序确保安全策略不会被宽松规则覆盖</div>
+    </div>
+    <div class="card">
+      <div class="card-title">熔断机制防失控</div>
+      <div class="card-desc">连续拒绝自动降级，防止 AI 在权限不足时无限重试</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Unicode 净化防注入</div>
+      <div class="card-desc">迭代规范化直到稳定，防止不可见字符注入指令</div>
+    </div>
+  </div>
+
+  <p style="margin-top:40px;text-align:center;color:var(--text-dim)">
+    <a href="../index.html">← 返回首页</a> &nbsp;|&nbsp;
+    <a href="03-prompt.html">上一篇：提示词系统</a> &nbsp;|&nbsp;
+    <a href="05-agent.html">下一篇：多Agent系统 →</a>
+  </p>
+</div>
+
+</div><script src="../js/main.js"></script>
+</body>
+</html>
