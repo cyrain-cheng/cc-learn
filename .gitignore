@@ -6,6 +6,7 @@
 !.github/
 !.gitignore
 !README.md
+!DEPLOY.md
 
 # 源码和编辑器配置不推
 src/
