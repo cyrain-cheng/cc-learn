@@ -1,4 +1,4 @@
-name: Deploy to Aliyun
+name: Deploy to Server
 
 on:
   push:
@@ -17,9 +17,9 @@ jobs:
       - name: Deploy via rsync
         uses: burnett01/rsync-deployments@7.0.1
         with:
-          switches: -avzr --delete --chmod=D755,F644
+          switches: -avz --delete
           path: front/
           remote_path: /var/www/cc-learn/
-          remote_host: ${{ secrets.SERVER_IP }}
-          remote_user: ${{ secrets.SERVER_USER }}
-          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          remote_host: ${{ secrets.DEPLOY_HOST }}
+          remote_user: ${{ secrets.DEPLOY_USER }}
+          remote_key: ${{ secrets.DEPLOY_SSH_KEY }}
