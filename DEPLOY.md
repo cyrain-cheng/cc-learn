@@ -6,7 +6,7 @@
 
 | 项目 | 值 |
 |------|------|
-| IP | 39.100.105.246 |
+| IP | 见 GitHub Secrets `DEPLOY_HOST` |
 | 系统 | Alibaba Cloud Linux 3 |
 | Web 服务器 | nginx 1.20.1 |
 | 站点根目录 | /var/www |
@@ -16,9 +16,9 @@
 
 ```
 /var/www/
-├── cc-learn/    → http://39.100.105.246/cc-learn
-├── think/       → http://39.100.105.246/think
-└── xxx/         → http://39.100.105.246/xxx（未来新项目）
+├── cc-learn/    → http://<服务器IP>/cc-learn
+├── think/       → http://<服务器IP>/think
+└── xxx/         → http://<服务器IP>/xxx（未来新项目）
 ```
 
 nginx 统一代理 `/var/www` 目录，每个子目录即一个独立站点，通过路径直接访问。
@@ -100,7 +100,7 @@ jobs:
 
 | Secret 名称 | 值 |
 |---|---|
-| `DEPLOY_HOST` | 39.100.105.246 |
+| `DEPLOY_HOST` | 服务器公网 IP |
 | `DEPLOY_USER` | root |
 | `DEPLOY_SSH_KEY` | 服务器 SSH 私钥（见下方说明） |
 
